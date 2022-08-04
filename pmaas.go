@@ -3,16 +3,40 @@ package core
 import (
 	"fmt"
 	"net/http"
+
 	"pmaas.io/spi"
 )
 
+type PluginConfig struct {
+}
+
+type pluginWithConfig struct {
+	config   *PluginConfig
+	instance spi.IPMAASPlugin
+}
+
 type Config struct {
 	HttpPort int
+	plugins  []*pluginWithConfig
 }
 
 func NewConfig() *Config {
 	return &Config{
-		8090,
+		HttpPort: 8090,
+		plugins:  nil,
+	}
+}
+
+func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
+	var wrapper = &pluginWithConfig{
+		config:   &config,
+		instance: plugin,
+	}
+
+	if c.plugins == nil {
+		c.plugins = []*pluginWithConfig{wrapper}
+	} else {
+		c.plugins = append(c.plugins, wrapper)
 	}
 }
 
