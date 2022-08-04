@@ -40,13 +40,20 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	}
 }
 
+type containerAdapter struct {
+	target *pluginWithConfig
+}
+
 type PMAAS struct {
 	config  *Config
-	plugins []spi.IPMAASPlugin
+	plugins []*pluginWithConfig
 }
 
 func NewPMAAS(config *Config) *PMAAS {
-	return &PMAAS{config: config}
+	return &PMAAS{
+		config: config,
+		plugins: config.plugins,
+	}
 }
 
 func hello(w http.ResponseWriter, req *http.Request) {
@@ -57,7 +64,21 @@ func listPlugins(w http.ResponseWriter, req *http.Request) {
 	fmt.Fprintf(w, "plugins:\n")
 }
 
-func (pmaas *PMAAS) ListenAndServe() {
+func (pmaas *PMAAS) Run() {
+	fmt.Printf("Initializing...\n")
+	// Init plugins
+	for _, plugin := range pmaas.plugins {
+		plugin.instance.Init(&containerAdapter{plugin})
+	}
+
+	fmt.Printf("Starting...\n")
+
+	// Start plugins
+	for _, plugin := range pmaas.plugins {
+		plugin.instance.Start()
+	}
+
+	fmt.Printf("Running...\n")
 	http.HandleFunc("/", hello)
 	http.HandleFunc("/plugin", listPlugins)
 	http.ListenAndServe(fmt.Sprintf(":%d", pmaas.config.HttpPort), nil)
