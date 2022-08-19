@@ -16,9 +16,15 @@ import (
 type PluginConfig struct {
 }
 
+type httpHandlerRegistration struct {
+	pattern     string
+	handlerFunc http.HandlerFunc
+}
+
 type pluginWithConfig struct {
-	config   *PluginConfig
-	instance spi.IPMAASPlugin
+	config       *PluginConfig
+	instance     spi.IPMAASPlugin
+	httpHandlers []*httpHandlerRegistration
 }
 
 type Config struct {
@@ -35,8 +41,9 @@ func NewConfig() *Config {
 
 func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	var wrapper = &pluginWithConfig{
-		config:   &config,
-		instance: plugin,
+		config:       &config,
+		instance:     plugin,
+		httpHandlers: make([]*httpHandlerRegistration, 0),
 	}
 
 	if c.plugins == nil {
@@ -48,6 +55,14 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 
 type containerAdapter struct {
 	target *pluginWithConfig
+}
+
+func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
+	registration := httpHandlerRegistration{
+		pattern:     path,
+		handlerFunc: handlerFunc,
+	}
+	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
 }
 
 type PMAAS struct {
@@ -80,7 +95,8 @@ func (pmaas *PMAAS) Run() {
 	fmt.Printf("Initializing...\n")
 	// Init plugins
 	for _, plugin := range pmaas.plugins {
-		plugin.instance.Init(&containerAdapter{plugin})
+		plugin.instance.Init(&containerAdapter{
+			target: plugin})
 	}
 
 	fmt.Printf("Starting...\n")
@@ -96,8 +112,17 @@ func (pmaas *PMAAS) Run() {
 
 	g, gCtx := errgroup.WithContext(mainCtx)
 
-	var httpServer = &http.Server{
-		Addr: fmt.Sprintf(":%d", pmaas.config.HttpPort),
+	serveMux := http.NewServeMux()
+
+	for _, plugin := range pmaas.plugins {
+		for _, httpRegistration := range plugin.httpHandlers {
+			serveMux.HandleFunc(httpRegistration.pattern, httpRegistration.handlerFunc)
+		}
+	}
+
+	httpServer := &http.Server{
+		Addr:    fmt.Sprintf(":%d", pmaas.config.HttpPort),
+		Handler: serveMux,
 	}
 
 	g.Go(func() error {
