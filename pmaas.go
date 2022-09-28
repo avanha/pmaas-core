@@ -54,6 +54,7 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 }
 
 type containerAdapter struct {
+	pmaas  *PMAAS
 	target *pluginWithConfig
 }
 
@@ -63,6 +64,10 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 		handlerFunc: handlerFunc,
 	}
 	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
+}
+
+func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, items []interface{}) {
+	ca.pmaas.renderList(ca.target, w, r, items)
 }
 
 type PMAAS struct {
@@ -96,6 +101,7 @@ func (pmaas *PMAAS) Run() {
 	// Init plugins
 	for _, plugin := range pmaas.plugins {
 		plugin.instance.Init(&containerAdapter{
+			pmaas:  pmaas,
 			target: plugin})
 	}
 
@@ -179,4 +185,22 @@ func stopPlugins(plugins []*pluginWithConfig) {
 		plugin.instance.Stop()
 	}
 	fmt.Printf("Plugin shutdown complete...\n")
+}
+
+func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request, items []interface{}) {
+	var renderPlugin spi.IPMAASRenderPlugin = nil
+	for _, plugin := range pmaas.plugins {
+		candidate, ok := plugin.instance.(spi.IPMAASRenderPlugin)
+
+		if ok {
+			renderPlugin = candidate
+			break
+		}
+	}
+
+	if renderPlugin == nil {
+		panic("No render plugin available")
+	}
+
+	renderPlugin.RenderList(w, r, items)
 }
