@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/signal"
+	"reflect"
 	"syscall"
 	"time"
 
@@ -69,6 +70,11 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, items []interface{}) {
 	ca.pmaas.renderList(ca.target, w, r, items)
 }
+
+func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
+	return ca.pmaas.getTemplate(ca.target, templateInfo)
+}
+
 
 type PMAAS struct {
 	config  *Config
@@ -204,3 +210,30 @@ func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWr
 
 	renderPlugin.RenderList(w, r, items)
 }
+
+func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
+	var templateEnginePlugin spi.IPMAASTemplateEnginePlugin = nil
+
+	for _, plugin := range pmaas.plugins {
+		candidate, ok := plugin.instance.(spi.IPMAASTemplateEnginePlugin)
+
+		if ok {
+			templateEnginePlugin = candidate
+			break
+		}
+	}
+
+	if templateEnginePlugin == nil {
+		panic("No template engine plugin available")
+	}
+
+	pluginType := reflect.TypeOf(sourcePlugin.instance)	
+	updatedPaths := make([]string, len(templateInfo.Paths))
+
+	for _, path := range templateInfo.Paths {
+		updatedPaths = append(updatedPaths, pluginType.PkgPath() + pluginType.Name() + path)
+	}
+
+	return templateEnginePlugin.GetTemplate(templateInfo)
+}
+
