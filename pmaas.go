@@ -15,6 +15,7 @@ import (
 )
 
 type PluginConfig struct {
+	ContentPathOverride string
 }
 
 type httpHandlerRegistration struct {
@@ -29,14 +30,16 @@ type pluginWithConfig struct {
 }
 
 type Config struct {
-	HttpPort int
-	plugins  []*pluginWithConfig
+	ContentPathRoot string
+	HttpPort        int
+	plugins         []*pluginWithConfig
 }
 
 func NewConfig() *Config {
 	return &Config{
-		HttpPort: 8090,
-		plugins:  nil,
+		ContentPathRoot: "/var/pmaas/content",
+		HttpPort:        8090,
+		plugins:         nil,
 	}
 }
 
@@ -75,6 +78,9 @@ func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.ITe
 	return ca.pmaas.getTemplate(ca.target, templateInfo)
 }
 
+func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) spi.EntityRenderFunc {
+	return ca.pmaas.getEntityRenderer(ca.target, entityType)
+}
 
 type PMAAS struct {
 	config  *Config
@@ -224,16 +230,42 @@ func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *sp
 	}
 
 	if templateEnginePlugin == nil {
-		panic("No template engine plugin available")
+		panic("No instance IPMAASTemplateEnginePlugin available")
 	}
 
-	pluginType := reflect.TypeOf(sourcePlugin.instance)	
+	var root string
+
+	if sourcePlugin.config.ContentPathOverride == "" {
+		root = pmaas.config.ContentPathRoot
+		pluginType := reflect.TypeOf(sourcePlugin.instance)
+
+		if pluginType.Kind() == reflect.Ptr {
+			pluginType = reflect.ValueOf(sourcePlugin.instance).Elem().Type()
+		}
+		root = root + "/" + pluginType.PkgPath() + "/" + pluginType.Name()
+	} else {
+		root = sourcePlugin.config.ContentPathOverride
+	}
+
 	updatedPaths := make([]string, len(templateInfo.Paths))
 
-	for _, path := range templateInfo.Paths {
-		updatedPaths = append(updatedPaths, pluginType.PkgPath() + pluginType.Name() + path)
+	for i, path := range templateInfo.Paths {
+		updatedPaths[i] = root + "/" + path
 	}
 
-	return templateEnginePlugin.GetTemplate(templateInfo)
+	updatedTemplateInfo := &spi.TemplateInfo{
+		Name:    templateInfo.Name,
+		FuncMap: templateInfo.FuncMap,
+		Paths:   updatedPaths,
+	}
+
+	return templateEnginePlugin.GetTemplate(updatedTemplateInfo)
 }
 
+func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
+	return GenericEntityRenderer
+}
+
+func GenericEntityRenderer(entity any) string {
+	return fmt.Sprintf("<div>%T</div>", entity)
+}
