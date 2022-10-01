@@ -23,10 +23,16 @@ type httpHandlerRegistration struct {
 	handlerFunc http.HandlerFunc
 }
 
+type entityRendererRegistration struct {
+	entityType reflect.Type
+	renderFunc spi.EntityRenderFunc
+}
+
 type pluginWithConfig struct {
 	config       *PluginConfig
 	instance     spi.IPMAASPlugin
 	httpHandlers []*httpHandlerRegistration
+	entityRenderers []entityRendererRegistration
 }
 
 type Config struct {
@@ -48,6 +54,7 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 		config:       &config,
 		instance:     plugin,
 		httpHandlers: make([]*httpHandlerRegistration, 0),
+		entityRenderers: make([]entityRendererRegistration, 0),
 	}
 
 	if c.plugins == nil {
@@ -68,6 +75,14 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 		handlerFunc: handlerFunc,
 	}
 	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
+}
+
+func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, renderFunc spi.EntityRenderFunc) {
+	registration := entityRendererRegistration{
+		entityType: entityType,
+		renderFunc: renderFunc,
+	}
+	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
 
 func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, items []interface{}) {
@@ -263,7 +278,17 @@ func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *sp
 }
 
 func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
-	return GenericEntityRenderer
+	renderer := GenericEntityRenderer
+	
+	for _, plugin := range pmaas.plugins {
+		for _, entityRendererRegistration := range plugin.entityRenderers {
+			if entityType.AssignableTo(entityRendererRegistration.entityType) {
+				renderer = entityRendererRegistration.renderFunc
+			}
+		}
+	}
+
+	return renderer
 }
 
 func GenericEntityRenderer(entity any) string {
