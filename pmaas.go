@@ -1,7 +1,9 @@
 package core
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -26,14 +28,15 @@ type httpHandlerRegistration struct {
 }
 
 type entityRendererRegistration struct {
-	entityType reflect.Type
-	renderFunc spi.EntityRenderFunc
+	entityType          reflect.Type
+	renderFunc          spi.EntityRenderFunc
+	streamingRenderFunc spi.StreamingEntityRenderFunc
 }
 
 type pluginWithConfig struct {
-	config       *PluginConfig
-	instance     spi.IPMAASPlugin
-	httpHandlers []*httpHandlerRegistration
+	config          *PluginConfig
+	instance        spi.IPMAASPlugin
+	httpHandlers    []*httpHandlerRegistration
 	entityRenderers []entityRendererRegistration
 }
 
@@ -53,9 +56,9 @@ func NewConfig() *Config {
 
 func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	var wrapper = &pluginWithConfig{
-		config:       &config,
-		instance:     plugin,
-		httpHandlers: make([]*httpHandlerRegistration, 0),
+		config:          &config,
+		instance:        plugin,
+		httpHandlers:    make([]*httpHandlerRegistration, 0),
 		entityRenderers: make([]entityRendererRegistration, 0),
 	}
 
@@ -87,6 +90,14 @@ func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rend
 	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
 
+func (ca *containerAdapter) RegisterStreamingEntityRenderer(entityType reflect.Type, renderFunc spi.StreamingEntityRenderFunc) {
+	registration := entityRendererRegistration{
+		entityType:          entityType,
+		streamingRenderFunc: renderFunc,
+	}
+	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
+}
+
 func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, items []interface{}) {
 	ca.pmaas.renderList(ca.target, w, r, items)
 }
@@ -109,14 +120,6 @@ func NewPMAAS(config *Config) *PMAAS {
 		config:  config,
 		plugins: config.plugins,
 	}
-}
-
-func hello(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprintf(w, "hello from pmaas\n")
-}
-
-func listPlugins(w http.ResponseWriter, req *http.Request) {
-	fmt.Fprintf(w, "plugins:\n")
 }
 
 func (pmaas *PMAAS) Run() {
@@ -226,6 +229,13 @@ func stopPlugins(plugins []*pluginWithConfig) {
 }
 
 func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request, items []interface{}) {
+	alt := r.URL.Query()["alt"]
+
+	if len(alt) > 0 && alt[0] == "json" {
+		pmaas.renderJsonList(w, r, items)
+		return
+	}
+
 	var renderPlugin spi.IPMAASRenderPlugin = nil
 	for _, plugin := range pmaas.plugins {
 		candidate, ok := plugin.instance.(spi.IPMAASRenderPlugin)
@@ -241,6 +251,14 @@ func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWr
 	}
 
 	renderPlugin.RenderList(w, r, items)
+}
+
+func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, r *http.Request, items []interface{}) {
+	bytes, err := json.MarshalIndent(items, "", "  ")
+
+	if err == nil {
+		w.Write(bytes)
+	}
 }
 
 func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
@@ -300,17 +318,36 @@ func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
 }
 
 func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
-	renderer := GenericEntityRenderer
-	
+	var renderer spi.EntityRenderFunc
+	var streamingRenderer spi.StreamingEntityRenderFunc
+
 	for _, plugin := range pmaas.plugins {
 		for _, entityRendererRegistration := range plugin.entityRenderers {
 			if entityType.AssignableTo(entityRendererRegistration.entityType) {
 				renderer = entityRendererRegistration.renderFunc
+				streamingRenderer = entityRendererRegistration.streamingRenderFunc
 			}
 		}
 	}
 
-	return renderer
+	if renderer != nil {
+		return renderer
+	}
+
+	if streamingRenderer != nil {
+		return func(entity any) string {
+			var buffer bytes.Buffer
+			err := streamingRenderer(&buffer, entity)
+
+			if err != nil {
+				panic(fmt.Sprintf("Error executing StreamingEntityRenderFunc: %v", err))
+			}
+
+			return buffer.String()
+		}
+	}
+
+	return GenericEntityRenderer
 }
 
 func GenericEntityRenderer(entity any) string {
