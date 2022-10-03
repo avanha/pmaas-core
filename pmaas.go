@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
 	"os/signal"
 	"reflect"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 type PluginConfig struct {
 	ContentPathOverride string
+	StaticContentDir string
 }
 
 type httpHandlerRegistration struct {
@@ -148,6 +150,15 @@ func (pmaas *PMAAS) Run() {
 	serveMux := http.NewServeMux()
 
 	for _, plugin := range pmaas.plugins {
+		pluginPath := "/" + pmaas.getPluginPath(plugin)
+		staticContentDir := pmaas.getContentRoot(plugin) + plugin.config.StaticContentDir
+		_, err := os.Stat(staticContentDir)
+		
+		if err == nil {
+			serveMux.Handle(pluginPath, http.FileServer(http.Dir(staticContentDir)))
+		}
+		
+
 		for _, httpRegistration := range plugin.httpHandlers {
 			serveMux.HandleFunc(httpRegistration.pattern, httpRegistration.handlerFunc)
 		}
@@ -248,20 +259,7 @@ func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *sp
 		panic("No instance IPMAASTemplateEnginePlugin available")
 	}
 
-	var root string
-
-	if sourcePlugin.config.ContentPathOverride == "" {
-		root = pmaas.config.ContentPathRoot
-		pluginType := reflect.TypeOf(sourcePlugin.instance)
-
-		if pluginType.Kind() == reflect.Ptr {
-			pluginType = reflect.ValueOf(sourcePlugin.instance).Elem().Type()
-		}
-		root = root + "/" + pluginType.PkgPath() + "/" + pluginType.Name()
-	} else {
-		root = sourcePlugin.config.ContentPathOverride
-	}
-
+	root := pmaas.getContentRoot(sourcePlugin)
 	updatedPaths := make([]string, len(templateInfo.Paths))
 
 	for i, path := range templateInfo.Paths {
@@ -275,6 +273,30 @@ func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *sp
 	}
 
 	return templateEnginePlugin.GetTemplate(updatedTemplateInfo)
+}
+
+func (pmaas *PMAAS) getPluginPath(plugin *pluginWithConfig) string {
+	pluginType := reflect.TypeOf(plugin.instance)
+
+	if pluginType.Kind() == reflect.Ptr {
+		pluginType = reflect.ValueOf(plugin.instance).Elem().Type()
+	}
+
+	return pluginType.PkgPath() + "/" + pluginType.Name()
+}
+
+func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
+	var root string
+
+	if plugin.config.ContentPathOverride == "" {
+		root = pmaas.config.ContentPathRoot
+		pluginPath := pmaas.getPluginPath(plugin)
+		root = root + "/" + pluginPath
+	} else {
+		root = plugin.config.ContentPathOverride
+	}
+
+	return root
 }
 
 func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
