@@ -19,7 +19,7 @@ import (
 
 type PluginConfig struct {
 	ContentPathOverride string
-	StaticContentDir string
+	StaticContentDir string `default:"static"`
 }
 
 type httpHandlerRegistration struct {
