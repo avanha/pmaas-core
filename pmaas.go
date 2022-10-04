@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
@@ -19,7 +20,7 @@ import (
 
 type PluginConfig struct {
 	ContentPathOverride string
-	StaticContentDir string
+	StaticContentDir string `default:"static"`
 }
 
 type httpHandlerRegistration struct {
@@ -44,6 +45,20 @@ type Config struct {
 	ContentPathRoot string
 	HttpPort        int
 	plugins         []*pluginWithConfig
+}
+
+type dirWithLogger struct {
+	delegate http.Dir
+}
+
+func (dwl dirWithLogger) Open(name string) (http.File, error) {
+	file, err := dwl.delegate.Open(name)
+
+	if err != nil {
+		fmt.Printf("Error opening %s: %v\n", name, err)
+	}
+
+	return file, err
 }
 
 func NewConfig() *Config {
@@ -122,6 +137,10 @@ func NewPMAAS(config *Config) *PMAAS {
 	}
 }
 
+func hello(w http.ResponseWriter, r *http.Request) {
+	io.WriteString(w, "Hello!\n")
+}
+
 func (pmaas *PMAAS) Run() {
 	mainCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer func() {
@@ -145,20 +164,26 @@ func (pmaas *PMAAS) Run() {
 	}
 
 	fmt.Printf("Running...\n")
-	//http.HandleFunc("/", hello)
-	//http.HandleFunc("/plugin", listPlugins)
-
+	
 	g, gCtx := errgroup.WithContext(mainCtx)
 
 	serveMux := http.NewServeMux()
+	serveMux.HandleFunc("/hello", hello)
+	//serveMux.HandleFunc("/plugin", listPlugins)
 
 	for _, plugin := range pmaas.plugins {
-		pluginPath := "/" + pmaas.getPluginPath(plugin)
-		staticContentDir := pmaas.getContentRoot(plugin) + plugin.config.StaticContentDir
+		fmt.Printf("Plugin %T config: %v\n", plugin.instance, plugin.config)
+		pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
+		staticContentDir := pmaas.getContentRoot(plugin) + "/" + plugin.config.StaticContentDir
 		_, err := os.Stat(staticContentDir)
 		
 		if err == nil {
-			serveMux.Handle(pluginPath, http.FileServer(http.Dir(staticContentDir)))
+			fmt.Printf("Serving %s from %s\n", pluginPath, staticContentDir)
+			serveMux.Handle(pluginPath,
+				http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir),})))
+			serveMux.HandleFunc(pluginPath + "hello", hello)
+		} else {
+			fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
 		}
 		
 
@@ -166,6 +191,8 @@ func (pmaas *PMAAS) Run() {
 			serveMux.HandleFunc(httpRegistration.pattern, httpRegistration.handlerFunc)
 		}
 	}
+
+	fmt.Printf("serverMux: %v", serveMux)
 
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", pmaas.config.HttpPort),
