@@ -20,7 +20,7 @@ import (
 
 type PluginConfig struct {
 	ContentPathOverride string
-	StaticContentDir string `default:"static"`
+	StaticContentDir    string `default:"static"`
 }
 
 type httpHandlerRegistration struct {
@@ -29,9 +29,9 @@ type httpHandlerRegistration struct {
 }
 
 type entityRendererRegistration struct {
-	entityType          reflect.Type
-	renderFunc          spi.EntityRenderFunc
-	streamingRenderFunc spi.StreamingEntityRenderFunc
+	entityType               reflect.Type
+	rendererFactory          spi.EntityRendererFactory
+	streamingRendererFactory spi.StreamingEntityRendererFactory
 }
 
 type pluginWithConfig struct {
@@ -97,18 +97,18 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
 }
 
-func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, renderFunc spi.EntityRenderFunc) {
+func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rendererFactory spi.EntityRendererFactory) {
 	registration := entityRendererRegistration{
-		entityType: entityType,
-		renderFunc: renderFunc,
+		entityType:      entityType,
+		rendererFactory: rendererFactory,
 	}
 	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
 
-func (ca *containerAdapter) RegisterStreamingEntityRenderer(entityType reflect.Type, renderFunc spi.StreamingEntityRenderFunc) {
+func (ca *containerAdapter) RegisterStreamingEntityRenderer(entityType reflect.Type, streamingRendererFactory spi.StreamingEntityRendererFactory) {
 	registration := entityRendererRegistration{
-		entityType:          entityType,
-		streamingRenderFunc: renderFunc,
+		entityType:               entityType,
+		streamingRendererFactory: streamingRendererFactory,
 	}
 	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
@@ -164,7 +164,7 @@ func (pmaas *PMAAS) Run() {
 	}
 
 	fmt.Printf("Running...\n")
-	
+
 	g, gCtx := errgroup.WithContext(mainCtx)
 
 	serveMux := http.NewServeMux()
@@ -176,16 +176,15 @@ func (pmaas *PMAAS) Run() {
 		pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
 		staticContentDir := pmaas.getContentRoot(plugin) + "/" + plugin.config.StaticContentDir
 		_, err := os.Stat(staticContentDir)
-		
+
 		if err == nil {
 			fmt.Printf("Serving %s from %s\n", pluginPath, staticContentDir)
 			serveMux.Handle(pluginPath,
-				http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir),})))
-			serveMux.HandleFunc(pluginPath + "hello", hello)
+				http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir)})))
+			serveMux.HandleFunc(pluginPath+"hello", hello)
 		} else {
 			fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
 		}
-		
 
 		for _, httpRegistration := range plugin.httpHandlers {
 			serveMux.HandleFunc(httpRegistration.pattern, httpRegistration.handlerFunc)
@@ -345,29 +344,30 @@ func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
 }
 
 func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
-	var renderer spi.EntityRenderFunc
-	var streamingRenderer spi.StreamingEntityRenderFunc
+	var rendererFactory spi.EntityRendererFactory
+	var streamingRendererFactory spi.StreamingEntityRendererFactory
 
 	for _, plugin := range pmaas.plugins {
 		for _, entityRendererRegistration := range plugin.entityRenderers {
 			if entityType.AssignableTo(entityRendererRegistration.entityType) {
-				renderer = entityRendererRegistration.renderFunc
-				streamingRenderer = entityRendererRegistration.streamingRenderFunc
+				rendererFactory = entityRendererRegistration.rendererFactory
+				streamingRendererFactory = entityRendererRegistration.streamingRendererFactory
 			}
 		}
 	}
 
-	if renderer != nil {
-		return renderer
+	if rendererFactory != nil {
+		return rendererFactory().Render
 	}
 
-	if streamingRenderer != nil {
+	if streamingRendererFactory != nil {
+		streamingRenderer := streamingRendererFactory()
 		return func(entity any) string {
 			var buffer bytes.Buffer
-			err := streamingRenderer(&buffer, entity)
+			err := streamingRenderer.Render(&buffer, entity)
 
 			if err != nil {
-				panic(fmt.Sprintf("Error executing StreamingEntityRenderFunc: %v", err))
+				panic(fmt.Sprintf("Error executing StreamingEntityRendererFunc: %v", err))
 			}
 
 			return buffer.String()
