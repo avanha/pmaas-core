@@ -121,7 +121,7 @@ func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.ITe
 	return ca.pmaas.getTemplate(ca.target, templateInfo)
 }
 
-func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) spi.EntityRenderFunc {
+func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.EntityRenderFunc, error) {
 	return ca.pmaas.getEntityRenderer(ca.target, entityType)
 }
 
@@ -343,7 +343,7 @@ func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
 	return root
 }
 
-func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) spi.EntityRenderFunc {
+func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderFunc, error) {
 	var rendererFactory spi.EntityRendererFactory
 	var streamingRendererFactory spi.StreamingEntityRendererFactory
 
@@ -357,26 +357,33 @@ func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType
 	}
 
 	if rendererFactory != nil {
-		return rendererFactory().Render
+		return rendererFactory()
 	}
 
 	if streamingRendererFactory != nil {
-		streamingRenderer := streamingRendererFactory()
-		return func(entity any) string {
+		streamingRender, err := streamingRendererFactory()
+
+		if err != nil {
+			return nil, fmt.Errorf("streamingRendererFactory failed: %w", err)
+		}
+
+		wrapperFunc := func(entity any) (string, error) {
 			var buffer bytes.Buffer
-			err := streamingRenderer.Render(&buffer, entity)
+			err := streamingRender(&buffer, entity)
 
 			if err != nil {
-				panic(fmt.Sprintf("Error executing StreamingEntityRendererFunc: %v", err))
+				return "", fmt.Errorf("error executing StreamingEntityRenderFunc: %v", err)
 			}
 
-			return buffer.String()
+			return buffer.String(), nil
 		}
+
+		return wrapperFunc, nil
 	}
 
-	return GenericEntityRenderer
+	return genericEntityRenderer, nil
 }
 
-func GenericEntityRenderer(entity any) string {
-	return fmt.Sprintf("<div>%T</div>", entity)
+func genericEntityRenderer(entity any) (string, error) {
+	return fmt.Sprintf("<div>%T</div>", entity), nil
 }
