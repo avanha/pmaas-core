@@ -113,8 +113,8 @@ func (ca *containerAdapter) RegisterStreamingEntityRenderer(entityType reflect.T
 	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
 
-func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, items []interface{}) {
-	ca.pmaas.renderList(ca.target, w, r, items)
+func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, options spi.RenderListOptions, items []interface{}) {
+	ca.pmaas.renderList(ca.target, w, r, options, items)
 }
 
 func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
@@ -254,7 +254,8 @@ func stopPlugins(plugins []*pluginWithConfig) {
 	fmt.Printf("Plugin shutdown complete...\n")
 }
 
-func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request, items []interface{}) {
+func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request,
+	options spi.RenderListOptions, items []interface{}) {
 	alt := r.URL.Query()["alt"]
 
 	if len(alt) > 0 && alt[0] == "json" {
@@ -276,7 +277,7 @@ func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWr
 		panic("No render plugin available")
 	}
 
-	renderPlugin.RenderList(w, r, items)
+	renderPlugin.RenderList(w, r, options, items)
 }
 
 func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, r *http.Request, items []interface{}) {
