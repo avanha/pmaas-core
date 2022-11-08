@@ -35,10 +35,11 @@ type entityRendererRegistration struct {
 }
 
 type pluginWithConfig struct {
-	config          *PluginConfig
-	instance        spi.IPMAASPlugin
-	httpHandlers    []*httpHandlerRegistration
-	entityRenderers []entityRendererRegistration
+	config           *PluginConfig
+	instance         spi.IPMAASPlugin
+	httpHandlers     []*httpHandlerRegistration
+	entityRenderers  []entityRendererRegistration
+	staticContentDir string
 }
 
 type Config struct {
@@ -125,6 +126,10 @@ func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.Enti
 	return ca.pmaas.getEntityRenderer(ca.target, entityType)
 }
 
+func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
+	ca.target.staticContentDir = staticContentDir
+}
+
 type PMAAS struct {
 	config  *Config
 	plugins []*pluginWithConfig
@@ -173,17 +178,8 @@ func (pmaas *PMAAS) Run() {
 
 	for _, plugin := range pmaas.plugins {
 		fmt.Printf("Plugin %T config: %v\n", plugin.instance, plugin.config)
-		pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
-		staticContentDir := pmaas.getContentRoot(plugin) + "/" + plugin.config.StaticContentDir
-		_, err := os.Stat(staticContentDir)
-
-		if err == nil {
-			fmt.Printf("Serving %s from %s\n", pluginPath, staticContentDir)
-			serveMux.Handle(pluginPath,
-				http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir)})))
-			serveMux.HandleFunc(pluginPath+"hello", hello)
-		} else {
-			fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+		if plugin.staticContentDir != "" {
+			pmaas.configurePluginStaticContentDir(plugin, serveMux)
 		}
 
 		for _, httpRegistration := range plugin.httpHandlers {
@@ -191,7 +187,7 @@ func (pmaas *PMAAS) Run() {
 		}
 	}
 
-	fmt.Printf("serverMux: %v", serveMux)
+	fmt.Printf("serverMux: %v\n", serveMux)
 
 	httpServer := &http.Server{
 		Addr:    fmt.Sprintf(":%d", pmaas.config.HttpPort),
@@ -252,6 +248,21 @@ func stopPlugins(plugins []*pluginWithConfig) {
 		plugin.instance.Stop()
 	}
 	fmt.Printf("Plugin shutdown complete...\n")
+}
+
+func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *pluginWithConfig, serveMux *http.ServeMux) {
+	pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
+	staticContentDir := pmaas.getContentRoot(plugin) + "/" + plugin.staticContentDir
+	_, err := os.Stat(staticContentDir)
+
+	if err == nil {
+		fmt.Printf("Serving %s from %s\n", pluginPath, staticContentDir)
+		serveMux.Handle(pluginPath,
+			http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir)})))
+		serveMux.HandleFunc(pluginPath+"hello", hello)
+	} else {
+		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+	}
 }
 
 func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request,
