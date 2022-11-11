@@ -29,9 +29,8 @@ type httpHandlerRegistration struct {
 }
 
 type entityRendererRegistration struct {
-	entityType               reflect.Type
-	rendererFactory          spi.EntityRendererFactory
-	streamingRendererFactory spi.StreamingEntityRendererFactory
+	entityType      reflect.Type
+	rendererFactory spi.EntityRendererFactory
 }
 
 type pluginWithConfig struct {
@@ -106,23 +105,15 @@ func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rend
 	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
 }
 
-func (ca *containerAdapter) RegisterStreamingEntityRenderer(entityType reflect.Type, streamingRendererFactory spi.StreamingEntityRendererFactory) {
-	registration := entityRendererRegistration{
-		entityType:               entityType,
-		streamingRendererFactory: streamingRendererFactory,
-	}
-	ca.target.entityRenderers = append(ca.target.entityRenderers, registration)
-}
-
 func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, options spi.RenderListOptions, items []interface{}) {
 	ca.pmaas.renderList(ca.target, w, r, options, items)
 }
 
-func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
+func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.CompiledTemplate, error) {
 	return ca.pmaas.getTemplate(ca.target, templateInfo)
 }
 
-func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.EntityRenderFunc, error) {
+func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.EntityRenderer, error) {
 	return ca.pmaas.getEntityRenderer(ca.target, entityType)
 }
 
@@ -299,7 +290,8 @@ func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, r *http.Request, items
 	}
 }
 
-func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *spi.TemplateInfo) (spi.ITemplate, error) {
+func (pmaas *PMAAS) getTemplate(
+	sourcePlugin *pluginWithConfig, templateInfo *spi.TemplateInfo) (spi.CompiledTemplate, error) {
 	var templateEnginePlugin spi.IPMAASTemplateEnginePlugin = nil
 
 	for _, plugin := range pmaas.plugins {
@@ -316,19 +308,32 @@ func (pmaas *PMAAS) getTemplate(sourcePlugin *pluginWithConfig, templateInfo *sp
 	}
 
 	root := pmaas.getContentRoot(sourcePlugin)
+	webPath := "/" + pmaas.getPluginPath(sourcePlugin)
 	updatedPaths := make([]string, len(templateInfo.Paths))
+	updatedScripts := make([]string, len(templateInfo.Scripts))
+	updatedStyles := make([]string, len(templateInfo.Styles))
 
 	for i, path := range templateInfo.Paths {
 		updatedPaths[i] = root + "/" + path
 	}
 
-	updatedTemplateInfo := &spi.TemplateInfo{
+	for i, script := range templateInfo.Scripts {
+		updatedScripts[i] = webPath + "/" + script
+	}
+
+	for i, style := range templateInfo.Styles {
+		updatedStyles[i] = webPath + "/" + style
+	}
+
+	updatedTemplateInfo := spi.TemplateInfo{
 		Name:    templateInfo.Name,
 		FuncMap: templateInfo.FuncMap,
 		Paths:   updatedPaths,
+		Scripts: updatedScripts,
+		Styles:  updatedStyles,
 	}
 
-	return templateEnginePlugin.GetTemplate(updatedTemplateInfo)
+	return templateEnginePlugin.GetTemplate(&updatedTemplateInfo)
 }
 
 func (pmaas *PMAAS) getPluginPath(plugin *pluginWithConfig) string {
@@ -355,33 +360,38 @@ func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
 	return root
 }
 
-func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderFunc, error) {
+func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderer, error) {
 	var rendererFactory spi.EntityRendererFactory
-	var streamingRendererFactory spi.StreamingEntityRendererFactory
 
 	for _, plugin := range pmaas.plugins {
 		for _, entityRendererRegistration := range plugin.entityRenderers {
 			if entityType.AssignableTo(entityRendererRegistration.entityType) {
 				rendererFactory = entityRendererRegistration.rendererFactory
-				streamingRendererFactory = entityRendererRegistration.streamingRendererFactory
 			}
 		}
 	}
 
-	if rendererFactory != nil {
-		return rendererFactory()
+	// Did we find anything?
+	if rendererFactory == nil {
+		// No, return a generic renderer
+		return spi.EntityRenderer{RenderFunc: genericEntityRenderer}, nil
 	}
 
-	if streamingRendererFactory != nil {
-		streamingRender, err := streamingRendererFactory()
+	// Use the factory we found
+	renderer, err := rendererFactory()
 
-		if err != nil {
-			return nil, fmt.Errorf("streamingRendererFactory failed: %w", err)
-		}
+	if err != nil {
+		return spi.EntityRenderer{}, fmt.Errorf("rendererFactory failed: %w", err)
+	}
 
+	if renderer.RenderFunc != nil {
+		return renderer, nil
+	}
+
+	if renderer.StreamingRenderFunc != nil {
 		wrapperFunc := func(entity any) (string, error) {
 			var buffer bytes.Buffer
-			err := streamingRender(&buffer, entity)
+			err := renderer.StreamingRenderFunc(&buffer, entity)
 
 			if err != nil {
 				return "", fmt.Errorf("error executing StreamingEntityRenderFunc: %v", err)
@@ -390,10 +400,16 @@ func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType
 			return buffer.String(), nil
 		}
 
-		return wrapperFunc, nil
+		return spi.EntityRenderer{
+				RenderFunc:          wrapperFunc,
+				StreamingRenderFunc: renderer.StreamingRenderFunc,
+				Styles:              renderer.Styles,
+				Scripts:             renderer.Scripts},
+			nil
 	}
 
-	return genericEntityRenderer, nil
+	return spi.EntityRenderer{},
+		fmt.Errorf("invalid EntityRenderer instance, both RenderFunc and StreamingRenderFunc are nil")
 }
 
 func genericEntityRenderer(entity any) (string, error) {
