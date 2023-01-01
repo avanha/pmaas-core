@@ -122,14 +122,16 @@ func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
 }
 
 type PMAAS struct {
-	config  *Config
-	plugins []*pluginWithConfig
+	config        *Config
+	plugins       []*pluginWithConfig
+	entityManager *EntityManager
 }
 
 func NewPMAAS(config *Config) *PMAAS {
 	return &PMAAS{
-		config:  config,
-		plugins: config.plugins,
+		config:        config,
+		plugins:       config.plugins,
+		entityManager: NewEntityManager(),
 	}
 }
 
@@ -150,6 +152,18 @@ func (pmaas *PMAAS) Run() {
 		plugin.instance.Init(&containerAdapter{
 			pmaas:  pmaas,
 			target: plugin})
+	}
+
+	// I think we need new independent context with a cancel function (supportCtx).
+	// Run support go routines in an errGroup off the supportCtx
+	// The web server should run in the supportCtx
+	// When mainCtx is done, stop plugins
+	// Then cancel supportCtx, and wait for the errGroup to complete
+
+	err := pmaas.entityManager.Start()
+
+	if err != nil {
+		return
 	}
 
 	fmt.Printf("Starting...\n")
@@ -203,8 +217,9 @@ func (pmaas *PMAAS) Run() {
 	g.Go(func() error {
 		fmt.Printf("Shutdown task waiting for signal...\n")
 		<-gCtx.Done()
-		shutdownHttp(httpServer)
 		stopPlugins(pmaas.plugins)
+		shutdownHttp(httpServer)
+		stopEntityManager(pmaas.entityManager)
 		return nil
 	})
 
@@ -219,6 +234,16 @@ func (pmaas *PMAAS) Run() {
 	}()
 
 	fmt.Printf("Done\n")
+}
+
+func stopEntityManager(entityManager *EntityManager) {
+	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+	defer cancelFn()
+	err := entityManager.Stop(ctx)
+
+	if err != nil {
+		fmt.Printf("Error while stopping EntityManager: %v", err)
+	}
 }
 
 func shutdownHttp(httpServer *http.Server) {
