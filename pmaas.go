@@ -139,11 +139,9 @@ func hello(w http.ResponseWriter, r *http.Request) {
 
 func (pmaas *PMAAS) Run() error {
 	fmt.Printf("pmaas.Run: Start\n")
+
 	mainCtx, cancelFn := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer func() {
-		fmt.Printf("pmaas.Run: Executing deferred mainCtx cancelFn\n")
-		cancelFn()
-	}()
+	defer cancelFn()
 
 	fmt.Printf("Initializing...\n")
 	// Init plugins
