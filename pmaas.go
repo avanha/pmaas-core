@@ -13,8 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"pmaas.io/spi"
 )
 
@@ -139,11 +137,12 @@ func hello(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, "Hello!\n")
 }
 
-func (pmaas *PMAAS) Run() {
-	mainCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+func (pmaas *PMAAS) Run() error {
+	fmt.Printf("pmaas.Run: Start\n")
+	mainCtx, cancelFn := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer func() {
-		fmt.Printf("Executing deferred stop()\n")
-		stop()
+		fmt.Printf("pmaas.Run: Executing deferred mainCtx cancelFn\n")
+		cancelFn()
 	}()
 
 	fmt.Printf("Initializing...\n")
@@ -160,23 +159,46 @@ func (pmaas *PMAAS) Run() {
 	// When mainCtx is done, stop plugins
 	// Then cancel supportCtx, and wait for the errGroup to complete
 
-	err := pmaas.entityManager.Start()
+	fmt.Printf("pmaas.Run: Starting core services...\n")
+	var err error
 
+	err = pmaas.entityManager.Start()
 	if err != nil {
-		return
+		return err
 	}
 
-	fmt.Printf("Starting...\n")
+	var httpServer *HttpServer
+	httpServer, err = pmaas.startHttpServer()
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("pmaas.Run: Starting plugins...\n")
 
 	// Start plugins
 	for _, plugin := range pmaas.plugins {
 		plugin.instance.Start()
 	}
 
-	fmt.Printf("Running...\n")
+	// Wait for the done signal
+	fmt.Printf("pmaas.Run: Running, waiting for done sginal...\n")
+	<-mainCtx.Done()
 
-	g, gCtx := errgroup.WithContext(mainCtx)
+	fmt.Printf("pmaas.Run: Done sginal recevied, stopping...\n")
+	fmt.Printf("pmaas.Run: Stopping plugins...\n")
+	stopPlugins(pmaas.plugins)
 
+	fmt.Printf("pmaas.Run: Stopping core services...\n")
+
+	stopHttpServer(httpServer)
+	stopEntityManager(pmaas.entityManager)
+
+	fmt.Printf("pmaas.Run: End\n")
+
+	return nil
+}
+
+func (pmaas *PMAAS) startHttpServer() (*HttpServer, error) {
 	serveMux := http.NewServeMux()
 	serveMux.HandleFunc("/hello", hello)
 	//serveMux.HandleFunc("/plugin", listPlugins)
@@ -194,46 +216,19 @@ func (pmaas *PMAAS) Run() {
 
 	fmt.Printf("serverMux: %v\n", serveMux)
 
-	httpServer := &http.Server{
-		Addr:    fmt.Sprintf(":%d", pmaas.config.HttpPort),
-		Handler: serveMux,
+	httpServer := NewHttpServer(serveMux, pmaas.config.HttpPort)
+
+	return httpServer, httpServer.Start()
+}
+
+func stopHttpServer(httpServer *HttpServer) {
+	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+	defer cancelFn()
+	err := httpServer.Stop(ctx)
+
+	if err != nil {
+		fmt.Printf("Error stopping HttpServer: %v", err)
 	}
-
-	g.Go(func() error {
-		fmt.Printf("HTTP Server starting...\n")
-		var err = httpServer.ListenAndServe()
-
-		if err == nil || err == http.ErrServerClosed {
-			fmt.Printf("HTTP Server stopped...\n")
-			err = nil
-		} else {
-			fmt.Printf("HTTP Server stopped with error: %s\n", err)
-		}
-		return err
-	})
-
-	time.Sleep(100 * time.Millisecond)
-
-	g.Go(func() error {
-		fmt.Printf("Shutdown task waiting for signal...\n")
-		<-gCtx.Done()
-		stopPlugins(pmaas.plugins)
-		shutdownHttp(httpServer)
-		stopEntityManager(pmaas.entityManager)
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		fmt.Printf("Stopped with error: %s \n", err)
-
-	}
-
-	go func() {
-		<-mainCtx.Done()
-		fmt.Printf("mainCtx is done\n")
-	}()
-
-	fmt.Printf("Done\n")
 }
 
 func stopEntityManager(entityManager *EntityManager) {
@@ -242,28 +237,14 @@ func stopEntityManager(entityManager *EntityManager) {
 	err := entityManager.Stop(ctx)
 
 	if err != nil {
-		fmt.Printf("Error while stopping EntityManager: %v", err)
-	}
-}
-
-func shutdownHttp(httpServer *http.Server) {
-	fmt.Printf("HTTP Server shutdown started...\n")
-	var err = httpServer.Shutdown(context.Background())
-
-	if err == nil {
-		fmt.Printf("HTTP Server shutdown complete...\n")
-	} else {
-		fmt.Printf("HTTP Server shutdown completd with error: %s\n", err)
+		fmt.Printf("Error stopping EntityManager: %v", err)
 	}
 }
 
 func stopPlugins(plugins []*pluginWithConfig) {
-	fmt.Printf("Plugin shutdown started...\n")
-	// Stop plugins
 	for _, plugin := range plugins {
 		plugin.instance.Stop()
 	}
-	fmt.Printf("Plugin shutdown complete...\n")
 }
 
 func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *pluginWithConfig, serveMux *http.ServeMux) {
