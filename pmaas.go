@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"reflect"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ type pluginWithConfig struct {
 	httpHandlers     []*httpHandlerRegistration
 	entityRenderers  []entityRendererRegistration
 	staticContentDir string
+	pluginType       reflect.Type
 }
 
 type Config struct {
@@ -73,6 +75,7 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 		instance:        plugin,
 		httpHandlers:    make([]*httpHandlerRegistration, 0),
 		entityRenderers: make([]entityRendererRegistration, 0),
+		pluginType:      getPluginType(plugin),
 	}
 
 	if c.plugins == nil {
@@ -82,10 +85,23 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	}
 }
 
+func getPluginType(plugin spi.IPMAASPlugin) reflect.Type {
+	pluginType := reflect.TypeOf(plugin)
+
+	if pluginType.Kind() == reflect.Ptr {
+		pluginType = reflect.ValueOf(plugin).Elem().Type()
+	}
+
+	return pluginType
+}
+
 type containerAdapter struct {
 	pmaas  *PMAAS
 	target *pluginWithConfig
 }
+
+// Force implementation of IPMAASContainer
+var _ spi.IPMAASContainer = (*containerAdapter)(nil)
 
 func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
 	registration := httpHandlerRegistration{
@@ -117,6 +133,14 @@ func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.Enti
 
 func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
 	ca.target.staticContentDir = staticContentDir
+}
+
+func (ca *containerAdapter) RegisterEntity(uniqueData string, entityType reflect.Type) (string, error) {
+	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType)
+}
+
+func (ca *containerAdapter) DeregisterEntity(id string) error {
+	return ca.pmaas.deregisterEntity(ca.target, id)
 }
 
 type PMAAS struct {
@@ -341,12 +365,7 @@ func (pmaas *PMAAS) getTemplate(
 }
 
 func (pmaas *PMAAS) getPluginPath(plugin *pluginWithConfig) string {
-	pluginType := reflect.TypeOf(plugin.instance)
-
-	if pluginType.Kind() == reflect.Ptr {
-		pluginType = reflect.ValueOf(plugin.instance).Elem().Type()
-	}
-
+	pluginType := plugin.pluginType
 	return pluginType.PkgPath() + "/" + pluginType.Name()
 }
 
@@ -414,6 +433,22 @@ func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType
 
 	return spi.EntityRenderer{},
 		fmt.Errorf("invalid EntityRenderer instance, both RenderFunc and StreamingRenderFunc are nil")
+}
+
+func (pmaas *PMAAS) registerEntity(sourcePlugin *pluginWithConfig, uniqueData string, entityType reflect.Type) (string, error) {
+	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.pluginType.PkgPath(), sourcePlugin.pluginType.Name(), uniqueData)
+	id = strings.ReplaceAll(id, " ", "_")
+	err := pmaas.entityManager.AddEntity(id, entityType)
+
+	if err != nil {
+		return "", err
+	}
+
+	return id, nil
+}
+
+func (pmaas *PMAAS) deregisterEntity(sourcePlugin *pluginWithConfig, id string) error {
+	return pmaas.entityManager.RemoveEntity(id)
 }
 
 func genericEntityRenderer(entity any) (string, error) {

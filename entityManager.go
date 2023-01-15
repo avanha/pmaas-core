@@ -4,17 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
+	"reflect"
 )
 
 type addEntityRequest struct {
-	entityInfo string
-	responseCh chan string
+	id         string
+	entityType reflect.Type
+	responseCh chan error
 }
 
 type removeEntityRequest struct {
 	registrationId string
-	responseCh     chan string
+	responseCh     chan error
+}
+
+type entityRecord struct {
+	id         string
+	entityType reflect.Type
 }
 
 type EntityManager struct {
@@ -23,6 +29,7 @@ type EntityManager struct {
 	removeEntityCh chan removeEntityRequest
 	runCancelFn    context.CancelFunc
 	runDoneCh      chan error
+	entities       map[string]entityRecord
 }
 
 func NewEntityManager() *EntityManager {
@@ -30,6 +37,7 @@ func NewEntityManager() *EntityManager {
 		canSendCh:      make(chan bool),
 		addEntityCh:    make(chan addEntityRequest),
 		removeEntityCh: make(chan removeEntityRequest),
+		entities:       make(map[string]entityRecord),
 	}
 	return entityManager
 }
@@ -72,11 +80,11 @@ LOOP1:
 	for {
 		select {
 		case request := <-em.addEntityCh:
-			request.responseCh <- fmt.Sprintf("entity_%s", time.Now().GoString())
+			request.responseCh <- em.handleAddEntityRequest(request)
 			close(request.responseCh)
 			break
 		case request := <-em.removeEntityCh:
-			request.responseCh <- request.registrationId
+			request.responseCh <- em.handleRemoveEntityRequest(request)
 			close(request.responseCh)
 			break
 		case <-ctx.Done():
@@ -91,11 +99,11 @@ LOOP2:
 	for {
 		select {
 		case request := <-em.addEntityCh:
-			request.responseCh <- fmt.Sprintf("entity_%s", time.Now().GoString())
+			request.responseCh <- em.handleAddEntityRequest(request)
 			close(request.responseCh)
 			break
 		case request := <-em.removeEntityCh:
-			request.responseCh <- request.registrationId
+			request.responseCh <- em.handleRemoveEntityRequest(request)
 			close(request.responseCh)
 			break
 		default:
@@ -111,26 +119,54 @@ LOOP2:
 	fmt.Printf("EntityManager.Run stop\n")
 }
 
-func (em *EntityManager) AddEntity(temp string) (string, error) {
-	responseCh := make(chan string)
-	request := addEntityRequest{entityInfo: temp, responseCh: responseCh}
+func (em *EntityManager) handleAddEntityRequest(request addEntityRequest) error {
+	_, ok := em.entities[request.id]
+
+	if ok {
+		return fmt.Errorf("an entity with id \"%s\" is already registered", request.id)
+	}
+
+	record := entityRecord{
+		id:         request.id,
+		entityType: request.entityType,
+	}
+
+	em.entities[request.id] = record
+
+	return nil
+}
+
+func (em *EntityManager) handleRemoveEntityRequest(request removeEntityRequest) error {
+	_, ok := em.entities[request.registrationId]
+
+	if !ok {
+		return fmt.Errorf("no entity with id \"%s\" is registered", request.registrationId)
+	}
+
+	delete(em.entities, request.registrationId)
+
+	return nil
+}
+
+func (em *EntityManager) AddEntity(id string, entityType reflect.Type) error {
+	responseCh := make(chan error)
+	request := addEntityRequest{id: id, entityType: entityType, responseCh: responseCh}
 
 	select {
 	case <-em.canSendCh:
 		close(responseCh)
-		return "", errors.New("unable to add, EntityManager is no longer accepting requests")
+		return errors.New("unable to add, EntityManager is no longer accepting requests")
 	case em.addEntityCh <- request:
 		break
 	}
 
-	id := <-responseCh
+	err := <-responseCh
 
-	return id, nil
-
+	return err
 }
 
 func (em *EntityManager) RemoveEntity(registrationId string) error {
-	responseCh := make(chan string)
+	responseCh := make(chan error)
 	request := removeEntityRequest{registrationId: registrationId, responseCh: responseCh}
 
 	select {
@@ -141,7 +177,5 @@ func (em *EntityManager) RemoveEntity(registrationId string) error {
 		break
 	}
 
-	<-responseCh
-
-	return nil
+	return <-responseCh
 }
