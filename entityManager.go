@@ -66,7 +66,7 @@ func (em *EntityManager) Stop(ctx context.Context) error {
 		return fmt.Errorf("error stopping EntityManager, context done signal received while waiting for termination: %v", ctx.Err())
 	case err := <-em.runDoneCh:
 		if err != nil {
-			fmt.Printf("EntityManager terminated with error: %v", err)
+			fmt.Printf("EntityManager terminated with error: %v\n", err)
 		}
 		return nil
 	}

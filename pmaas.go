@@ -147,6 +147,7 @@ type PMAAS struct {
 	config        *Config
 	plugins       []*pluginWithConfig
 	entityManager *EntityManager
+	eventManager  *EventManager
 }
 
 func NewPMAAS(config *Config) *PMAAS {
@@ -154,6 +155,7 @@ func NewPMAAS(config *Config) *PMAAS {
 		config:        config,
 		plugins:       config.plugins,
 		entityManager: NewEntityManager(),
+		eventManager:  NewEventManager(),
 	}
 }
 
@@ -175,14 +177,13 @@ func (pmaas *PMAAS) Run() error {
 			target: plugin})
 	}
 
-	// I think we need new independent context with a cancel function (supportCtx).
-	// Run support go routines in an errGroup off the supportCtx
-	// The web server should run in the supportCtx
-	// When mainCtx is done, stop plugins
-	// Then cancel supportCtx, and wait for the errGroup to complete
-
 	fmt.Printf("pmaas.Run: Starting core services...\n")
 	var err error
+
+	err = pmaas.eventManager.Start()
+	if err != nil {
+		return err
+	}
 
 	err = pmaas.entityManager.Start()
 	if err != nil {
@@ -214,6 +215,7 @@ func (pmaas *PMAAS) Run() error {
 
 	stopHttpServer(httpServer)
 	stopEntityManager(pmaas.entityManager)
+	stopEventManager(pmaas.eventManager)
 
 	fmt.Printf("pmaas.Run: End\n")
 
@@ -259,7 +261,17 @@ func stopEntityManager(entityManager *EntityManager) {
 	err := entityManager.Stop(ctx)
 
 	if err != nil {
-		fmt.Printf("Error stopping EntityManager: %v", err)
+		fmt.Printf("Error stopping EntityManager: %v\n", err)
+	}
+}
+
+func stopEventManager(eventManager *EventManager) {
+	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
+	defer cancelFn()
+	err := eventManager.Stop(ctx)
+
+	if err != nil {
+		fmt.Printf("Error stopping EventManager: %v\n", err)
 	}
 }
 
