@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"pmaas.io/spi"
+	"pmaas.io/spi/events"
 )
 
 type PluginConfig struct {
@@ -143,20 +144,30 @@ func (ca *containerAdapter) DeregisterEntity(id string) error {
 	return ca.pmaas.deregisterEntity(ca.target, id)
 }
 
+func (ca *containerAdapter) RegisterEventReceiver(
+	predicate events.EventPredicate,
+	receiver events.EventReceiver) (int, error) {
+	return ca.pmaas.registerEventReceiver(ca.target, predicate, receiver)
+}
+
 type PMAAS struct {
 	config        *Config
 	plugins       []*pluginWithConfig
 	entityManager *EntityManager
 	eventManager  *EventManager
+	selfType      reflect.Type
 }
 
 func NewPMAAS(config *Config) *PMAAS {
-	return &PMAAS{
+	instance := &PMAAS{
 		config:        config,
 		plugins:       config.plugins,
 		entityManager: NewEntityManager(),
 		eventManager:  NewEventManager(),
 	}
+
+	instance.selfType = reflect.ValueOf(instance).Elem().Type()
+	return instance
 }
 
 func hello(w http.ResponseWriter, r *http.Request) {
@@ -456,11 +467,20 @@ func (pmaas *PMAAS) registerEntity(sourcePlugin *pluginWithConfig, uniqueData st
 		return "", err
 	}
 
+	pmaas.eventManager.BroadcastEvent(pmaas.selfType, events.EntityRegisteredEvent{Id: id, EntityType: entityType})
+
 	return id, nil
 }
 
 func (pmaas *PMAAS) deregisterEntity(sourcePlugin *pluginWithConfig, id string) error {
 	return pmaas.entityManager.RemoveEntity(id)
+}
+
+func (pmaas *PMAAS) registerEventReceiver(
+	sourcePlugin *pluginWithConfig,
+	predicate events.EventPredicate,
+	receiver events.EventReceiver) (int, error) {
+	return pmaas.eventManager.AddReceiver(predicate, receiver)
 }
 
 func genericEntityRenderer(entity any) (string, error) {
