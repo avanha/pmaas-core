@@ -6,7 +6,16 @@ Most functionality should be implemented in plugins that implement the PMAAS SPI
  
 And idea for a syntax to configure eventing / automation:
 
-masterBedroom.when()
-    .temperature().lte().farenheit(80)
-    .and().time().between(1, 7)
-    .then(turnOffCelingFan)
+masterBedroom.When()
+    .Temperature().LTE().Fahrenheit(80)
+    .And().Hours().Between(1, 7)
+    .Then(turnOffCeilingFan)
+
+Notes:
+
+Working on EntityManager - A registry of entities that a plugin can contribute to the system.
+Each entity has an ID, a source plugin and a Type.
+The idea is that other plugins can register to receive entity add/remove events.
+
+We probably don't want to store the entities themselves to avoid leaks.  Rather other
+plugins can use the IDs to obtain information about them (or some kind of reference).
