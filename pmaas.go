@@ -469,13 +469,22 @@ func (pmaas *PMAAS) registerEntity(sourcePlugin *pluginWithConfig, uniqueData st
 		return "", err
 	}
 
-	pmaas.eventManager.BroadcastEvent(pmaas.selfType, events.EntityRegisteredEvent{Id: id, EntityType: entityType})
+	event := events.EntityRegisteredEvent{Id: id, EntityType: entityType}
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, event)
+
+	if err != nil {
+		fmt.Printf("Unable to broadcast %s", event)
+	}
 
 	return id, nil
 }
 
 func (pmaas *PMAAS) deregisterEntity(sourcePlugin *pluginWithConfig, id string) error {
 	return pmaas.entityManager.RemoveEntity(id)
+}
+
+func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, event any) error {
+	return pmaas.eventManager.BroadcastEvent(sourcePlugin.pluginType, event)
 }
 
 func (pmaas *PMAAS) registerEventReceiver(

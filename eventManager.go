@@ -13,6 +13,10 @@ type broadcastEventRequest struct {
 	event       any
 }
 
+func (r broadcastEventRequest) String() string {
+	return fmt.Sprintf("%T from %v %v", r.event, r.eventSource, r.event)
+}
+
 type addReceiverRequest struct {
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
@@ -126,7 +130,7 @@ LOOP1:
 			break
 		case <-ctx.Done():
 			fmt.Printf("EventManager: ctx.Done signalled\n")
-			// Close canSendCh, which will prevent any more requests
+			// Close running, which will prevent any more requests
 			close(em.runningCh)
 			break LOOP1
 		}
@@ -166,7 +170,7 @@ func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 
 			if err != nil {
 				fmt.Printf(
-					"EventManager: Event receiver %d returned error whne processing %v\n",
+					"EventManager: Event receiver %d returned error when processing %v\n",
 					record.handle,
 					*eventInfo)
 			}
