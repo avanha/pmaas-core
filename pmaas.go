@@ -96,6 +96,8 @@ func getPluginType(plugin spi.IPMAASPlugin) reflect.Type {
 	return pluginType
 }
 
+// A containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the PMAAS server along
+// with the plugin instance and its config.  This allows us to track the plugin calling into the server.
 type containerAdapter struct {
 	pmaas  *PMAAS
 	target *pluginWithConfig
