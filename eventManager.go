@@ -114,6 +114,20 @@ func (em *EventManager) AddReceiver(predicate events.EventPredicate, receiver ev
 	return receiverHandle, nil
 }
 
+func (em *EventManager) RemoveReceiver(receiverHandle int) error {
+	resultCh := make(chan error)
+
+	select {
+	case <-em.runningCh:
+		close(resultCh)
+		return errors.New("unable to remove event receiver, EventManager is no longer accepting requests")
+	case em.removeReceiverCh <- removeReceiverRequest{receiverHandle: receiverHandle, resultCh: resultCh}:
+		break
+	}
+
+	return <-resultCh
+}
+
 func (em *EventManager) run(ctx context.Context, doneCh chan error) {
 	fmt.Printf("EventManager.Run start\n")
 	defer func() { close(doneCh) }()
@@ -127,6 +141,9 @@ LOOP1:
 			break
 		case request := <-em.addReceiverCh:
 			em.handleAddReceiver(&request)
+			break
+		case request := <-em.removeReceiverCh:
+			em.handleRemoveReceiver(&request)
 			break
 		case <-ctx.Done():
 			fmt.Printf("EventManager: ctx.Done signalled\n")
@@ -188,4 +205,16 @@ func (em *EventManager) handleAddReceiver(request *addReceiverRequest) {
 	record := receiverRecord{handle: handle, predicate: request.predicate, receiver: request.receiver}
 	em.receivers[handle] = record
 	request.resultCh <- handle
+}
+
+func (em *EventManager) handleRemoveReceiver(request *removeReceiverRequest) {
+	_, ok := em.receivers[request.receiverHandle]
+
+	if !ok {
+		request.resultCh <- errors.New(fmt.Sprintf("Receiver handle %v not found", request.receiverHandle))
+		return
+	}
+
+	delete(em.receivers, request.receiverHandle)
+	request.resultCh <- nil
 }

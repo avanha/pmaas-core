@@ -152,6 +152,10 @@ func (ca *containerAdapter) RegisterEventReceiver(
 	return ca.pmaas.registerEventReceiver(ca.target, predicate, receiver)
 }
 
+func (ca *containerAdapter) DeregisterEventReceiver(handle int) error {
+	return ca.pmaas.deregisterEventReceiver(ca.target, handle)
+}
+
 type PMAAS struct {
 	config        *Config
 	plugins       []*pluginWithConfig
@@ -460,7 +464,10 @@ func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType
 		fmt.Errorf("invalid EntityRenderer instance, both RenderFunc and StreamingRenderFunc are nil")
 }
 
-func (pmaas *PMAAS) registerEntity(sourcePlugin *pluginWithConfig, uniqueData string, entityType reflect.Type) (string, error) {
+func (pmaas *PMAAS) registerEntity(
+	sourcePlugin *pluginWithConfig,
+	uniqueData string,
+	entityType reflect.Type) (string, error) {
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.pluginType.PkgPath(), sourcePlugin.pluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
 	err := pmaas.entityManager.AddEntity(id, entityType)
@@ -473,7 +480,7 @@ func (pmaas *PMAAS) registerEntity(sourcePlugin *pluginWithConfig, uniqueData st
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, event)
 
 	if err != nil {
-		fmt.Printf("Unable to broadcast %s", event)
+		fmt.Printf("Unable to broadcast %s: %v", event, err)
 	}
 
 	return id, nil
@@ -488,10 +495,15 @@ func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, event any) er
 }
 
 func (pmaas *PMAAS) registerEventReceiver(
-	sourcePlugin *pluginWithConfig,
+	_ *pluginWithConfig,
 	predicate events.EventPredicate,
 	receiver events.EventReceiver) (int, error) {
 	return pmaas.eventManager.AddReceiver(predicate, receiver)
+}
+
+func (pmaas *PMAAS) deregisterEventReceiver(
+	_ *pluginWithConfig, handle int) error {
+	return pmaas.eventManager.RemoveReceiver(handle)
 }
 
 func genericEntityRenderer(entity any) (string, error) {
