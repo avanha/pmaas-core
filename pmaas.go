@@ -346,7 +346,7 @@ func (pmaas *PMAAS) renderList(_ *pluginWithConfig, w http.ResponseWriter, r *ht
 	renderPlugin.RenderList(w, r, options, items)
 }
 
-func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, r *http.Request, items []interface{}) {
+func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, _ *http.Request, items []interface{}) {
 	b, err := json.MarshalIndent(items, "", "  ")
 
 	if err == nil {
