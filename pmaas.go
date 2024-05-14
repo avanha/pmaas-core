@@ -180,8 +180,11 @@ func NewPMAAS(config *Config) *PMAAS {
 	return instance
 }
 
-func hello(w http.ResponseWriter, r *http.Request) {
-	io.WriteString(w, "Hello!\n")
+func hello(w http.ResponseWriter, _ *http.Request) {
+	_, err := io.WriteString(w, "Hello!\n")
+	if err != nil {
+		fmt.Printf("Error writing resposne: %V\n", err)
+	}
 }
 
 func (pmaas *PMAAS) Run() error {
@@ -317,7 +320,7 @@ func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *pluginWithConfig, se
 	}
 }
 
-func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWriter, r *http.Request,
+func (pmaas *PMAAS) renderList(_ *pluginWithConfig, w http.ResponseWriter, r *http.Request,
 	options spi.RenderListOptions, items []interface{}) {
 	alt := r.URL.Query()["alt"]
 
@@ -344,10 +347,14 @@ func (pmaas *PMAAS) renderList(sourcePlugin *pluginWithConfig, w http.ResponseWr
 }
 
 func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, r *http.Request, items []interface{}) {
-	bytes, err := json.MarshalIndent(items, "", "  ")
+	b, err := json.MarshalIndent(items, "", "  ")
 
 	if err == nil {
-		w.Write(bytes)
+		_, err := w.Write(b)
+
+		if err != nil {
+			fmt.Printf("Error writing response: %s\n", err)
+		}
 	}
 }
 
@@ -416,7 +423,7 @@ func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
 	return root
 }
 
-func (pmaas *PMAAS) getEntityRenderer(sourcePlugin *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderer, error) {
+func (pmaas *PMAAS) getEntityRenderer(_ *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderer, error) {
 	var rendererFactory spi.EntityRendererFactory
 
 	for _, plugin := range pmaas.plugins {
@@ -490,7 +497,7 @@ func (pmaas *PMAAS) registerEntity(
 	return id, nil
 }
 
-func (pmaas *PMAAS) deregisterEntity(sourcePlugin *pluginWithConfig, id string) error {
+func (pmaas *PMAAS) deregisterEntity(_ *pluginWithConfig, id string) error {
 	return pmaas.entityManager.RemoveEntity(id)
 }
 
