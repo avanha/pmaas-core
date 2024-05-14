@@ -114,6 +114,10 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
 }
 
+func (ca *containerAdapter) BroadcastEvent(event any) error {
+	return ca.pmaas.broadcastEvent(ca.target, event)
+}
+
 func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rendererFactory spi.EntityRendererFactory) {
 	registration := entityRendererRegistration{
 		entityType:      entityType,
@@ -476,7 +480,7 @@ func (pmaas *PMAAS) registerEntity(
 		return "", err
 	}
 
-	event := events.EntityRegisteredEvent{Id: id, EntityType: entityType}
+	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType}}
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, event)
 
 	if err != nil {
