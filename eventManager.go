@@ -163,6 +163,9 @@ LOOP2:
 		case request := <-em.addReceiverCh:
 			em.handleAddReceiver(&request)
 			break
+		case request := <-em.removeReceiverCh:
+			em.handleRemoveReceiver(&request)
+			break
 		default:
 			break LOOP2
 		}
