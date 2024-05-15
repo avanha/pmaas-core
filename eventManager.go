@@ -88,6 +88,9 @@ func (em *EventManager) Stop(ctx context.Context) error {
 }
 
 func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error {
+	// Note: We're using an unbuffered channel, so there must be a receive operation on broadcastEventCh
+	// (or EventManager shutdown) for this to return.  We should probably switch to a buffered channel in the future to
+	// avoid blocking event publishers.  For now, an unbuffered channel highlights deadlocks / problems.
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
@@ -129,9 +132,9 @@ func (em *EventManager) RemoveReceiver(receiverHandle int) error {
 }
 
 func (em *EventManager) run(ctx context.Context, doneCh chan error) {
-	fmt.Printf("EventManager.Run start\n")
+	fmt.Printf("EventManager.run: start\n")
+	fmt.Printf("EventManager.run: Select requests or done signal\n")
 	defer func() { close(doneCh) }()
-
 LOOP1:
 	// Process requests until we receive the done signal
 	for {
@@ -146,12 +149,15 @@ LOOP1:
 			em.handleRemoveReceiver(&request)
 			break
 		case <-ctx.Done():
-			fmt.Printf("EventManager: ctx.Done signalled\n")
+			fmt.Printf("EventManager.run: ctx.Done signalled\n")
 			// Close running, which will prevent any more requests
 			close(em.runningCh)
 			break LOOP1
 		}
+		fmt.Printf("EventManager.run: Select requests or done signal\n")
 	}
+
+	fmt.Printf("EventManager.run: Handling remaining requests\n")
 
 	// Consume any events already queued
 LOOP2:
@@ -169,11 +175,12 @@ LOOP2:
 		default:
 			break LOOP2
 		}
+		fmt.Printf("EventManager.run: Select requests\n")
 	}
 
 	close(em.broadcastEventCh)
 
-	fmt.Printf("EventManager.Run stop\n")
+	fmt.Printf("EventManager.run: stop\n")
 }
 
 func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
