@@ -140,12 +140,15 @@ LOOP1:
 	for {
 		select {
 		case request := <-em.broadcastEventCh:
+			fmt.Printf("EventManager.run: handling broadcast event request\n")
 			em.handleBroadcastEvent(request)
 			break
 		case request := <-em.addReceiverCh:
+			fmt.Printf("EventManager.run: handling add receiver request\n")
 			em.handleAddReceiver(&request)
 			break
 		case request := <-em.removeReceiverCh:
+			fmt.Printf("EventManager.run: handling remove receiver request\n")
 			em.handleRemoveReceiver(&request)
 			break
 		case <-ctx.Done():
