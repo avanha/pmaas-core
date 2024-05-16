@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.design/x/chann"
 	"pmaas.io/spi/events"
 	"reflect"
 )
@@ -38,7 +39,7 @@ type EventManager struct {
 	runCancelFn        context.CancelFunc
 	runDoneCh          chan error
 	runningCh          chan bool
-	broadcastEventCh   chan broadcastEventRequest
+	broadcastEventCh   *chann.Chann[broadcastEventRequest]
 	addReceiverCh      chan addReceiverRequest
 	removeReceiverCh   chan removeReceiverRequest
 	addReceiverCounter int
@@ -58,7 +59,7 @@ func (em *EventManager) Start() error {
 	doneCh := make(chan error)
 	go em.run(ctx, doneCh)
 	em.runningCh = make(chan bool)
-	em.broadcastEventCh = make(chan broadcastEventRequest)
+	em.broadcastEventCh = chann.New[broadcastEventRequest]()
 	em.addReceiverCh = make(chan addReceiverRequest)
 	em.removeReceiverCh = make(chan removeReceiverRequest)
 	em.runCancelFn = cancelFn
@@ -88,13 +89,15 @@ func (em *EventManager) Stop(ctx context.Context) error {
 }
 
 func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error {
-	// Note: We're using an unbuffered channel, so there must be a receive operation on broadcastEventCh
-	// (or EventManager shutdown) for this to return.  We should probably switch to a buffered channel in the future to
-	// avoid blocking event publishers.  For now, an unbuffered channel highlights deadlocks / problems.
+	// When using an unbuffered chanel, we get a deadlock if an event receiver tries to broadcast an event.
+	// This happens because the event manager goroutine is already busy performing the dispatch, so it
+	// can't receive the request.  We could create a buffered channel, but there's no guarantee about
+	// hitting the buffer limit.  We could save broadcast calls to a queue and process the queue at the end
+	// of dispatch.  Or fire off a goroutine to enqueue them.  I'm going to use xchann unbounded queue.
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
-	case em.broadcastEventCh <- broadcastEventRequest{eventSource: sourceType, event: event}:
+	case em.broadcastEventCh.In() <- broadcastEventRequest{eventSource: sourceType, event: event}:
 		break
 	}
 
@@ -139,7 +142,7 @@ LOOP1:
 	// Process requests until we receive the done signal
 	for {
 		select {
-		case request := <-em.broadcastEventCh:
+		case request := <-em.broadcastEventCh.Out():
 			fmt.Printf("EventManager.run: handling broadcast event request\n")
 			em.handleBroadcastEvent(request)
 			break
@@ -166,7 +169,7 @@ LOOP1:
 LOOP2:
 	for {
 		select {
-		case event := <-em.broadcastEventCh:
+		case event := <-em.broadcastEventCh.Out():
 			em.handleBroadcastEvent(event)
 			break
 		case request := <-em.addReceiverCh:
@@ -181,7 +184,7 @@ LOOP2:
 		fmt.Printf("EventManager.run: Select requests\n")
 	}
 
-	close(em.broadcastEventCh)
+	em.broadcastEventCh.Close()
 
 	fmt.Printf("EventManager.run: stop\n")
 }
