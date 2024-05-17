@@ -86,6 +86,9 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 func (pwc *pluginWithConfig) execInternal(target func()) error {
 	var err error = nil
 
+	// The solution here is inspired by "multiple senders one receiver" at
+	// https://go101.org/article/channel-closing.html
+
 	// Check if execRequestChClosed to avoid doing any extra work
 	select {
 	case <-pwc.execRequestChClosed:
@@ -94,6 +97,8 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		// Channel is probably open
 	}
 
+	// Indicate that a send attempt is in progress to avoid having the channel closed while it's
+	// used in the select statement.
 	pwc.execRequestChSendOps.Add(1)
 	defer pwc.execRequestChSendOps.Done()
 	select {
@@ -430,20 +435,13 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 		// Mark that execRequestCh is no longer open, so we don't try to close it twice
 		plugin.execRequestChOpen = false
 
-		// Note: I wonder if there's still a chance that we'll attempt to write to the closed channel.
-		// 1. The select that reads from execRequestChClosed and writes to execRequestCh is executing
-		// 2. We close execRequestChClosed, then execRequestCh
-		// 3. However, the scheduler attempts to write to execRequestCh first (or is informed of it being closed) before
-		//    it reads from the eecRequestChClosed channel.
-		// Based on a simple test, it turns out that this is a possible error.  Adding in a tiny pause to allow any
-		// goroutines currently waiting on the send to detect the close before closing appears to work, but is hacky.
-		// We probably need to deal with the potential panic from the write to closed channel.
-		// I think the only alternative is to use an actual lock.
+		// The solution here is inspired by "multiple senders one receiver" at
+		// https://go101.org/article/channel-closing.html
 
 		// Next, signal that execRequestCh channel is about to close
 		close(plugin.execRequestChClosed)
 
-		// Wait for any pending send operation complete.  They'll either complete the send, or bail out on the done
+		// Wait for any pending send operations complete.  They'll either complete the send, or bail out on the done
 		// signal.
 		plugin.execRequestChSendOps.Wait()
 
