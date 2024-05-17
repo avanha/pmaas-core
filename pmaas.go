@@ -35,15 +35,17 @@ type entityRendererRegistration struct {
 }
 
 type pluginWithConfig struct {
-	config           *PluginConfig
-	instance         spi.IPMAASPlugin
-	httpHandlers     []*httpHandlerRegistration
-	entityRenderers  []entityRendererRegistration
-	staticContentDir string
-	pluginType       reflect.Type
-	execRequestCh    chan func()
-	runnerDoneCh     chan error
-	running          bool
+	config              *PluginConfig
+	instance            spi.IPMAASPlugin
+	httpHandlers        []*httpHandlerRegistration
+	entityRenderers     []entityRendererRegistration
+	staticContentDir    string
+	pluginType          reflect.Type
+	execRequestCh       chan func()
+	execRequestChOpen   bool
+	execRequestChClosed chan bool
+	runnerDoneCh        chan error
+	running             bool
 }
 
 func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
@@ -80,13 +82,16 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 }
 
 func (pwc *pluginWithConfig) execInternal(target func()) error {
-	if pwc.execRequestCh == nil {
-		return errors.New("unable to execute target function, execRequestCh is nil")
+	var err error = nil
+	select {
+	case <-pwc.execRequestChClosed:
+		err = errors.New("unable to execute target function, execRequestCh is closed")
+		break
+	case pwc.execRequestCh <- target:
+		break
 	}
 
-	pwc.execRequestCh <- target
-
-	return nil
+	return err
 }
 
 type Config struct {
@@ -119,14 +124,16 @@ func NewConfig() *Config {
 
 func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	var wrapper = &pluginWithConfig{
-		config:          &config,
-		instance:        plugin,
-		httpHandlers:    make([]*httpHandlerRegistration, 0),
-		entityRenderers: make([]entityRendererRegistration, 0),
-		pluginType:      getPluginType(plugin),
-		execRequestCh:   nil,
-		runnerDoneCh:    nil,
-		running:         false,
+		config:              &config,
+		instance:            plugin,
+		httpHandlers:        make([]*httpHandlerRegistration, 0),
+		entityRenderers:     make([]entityRendererRegistration, 0),
+		pluginType:          getPluginType(plugin),
+		execRequestCh:       nil,
+		execRequestChOpen:   false,
+		execRequestChClosed: nil,
+		runnerDoneCh:        nil,
+		running:             false,
 	}
 
 	if c.plugins == nil {
@@ -253,6 +260,8 @@ func (pmaas *PMAAS) Run() error {
 	// Create a container adapter for each plugin and call Init on the plugin
 	for _, plugin := range pmaas.plugins {
 		plugin.execRequestCh = make(chan func())
+		plugin.execRequestChOpen = true
+		plugin.execRequestChClosed = make(chan bool)
 		plugin.runnerDoneCh = make(chan error)
 		ca := &containerAdapter{
 			pmaas:  pmaas,
@@ -403,11 +412,23 @@ func stopPlugins(plugins []*pluginWithConfig) {
 }
 
 func stopPluginRunner(plugin *pluginWithConfig) {
-	if plugin.execRequestCh != nil {
-		ch := plugin.execRequestCh
-		plugin.execRequestCh = nil
-		close(ch)
+	if plugin.execRequestChOpen {
+		// Mark that execRequestCh is no longer open, so we don't try to close it twice
+		plugin.execRequestChOpen = false
 
+		// Note: I wonder if there's still a chance that we'll attempt to write to the closed channel.
+		// 1. The select that reads from execRequestChClosed and writes to execRequestCh is executing
+		// 2. We close execRequestChClosed, then execRequestCh
+		// 3. However, the scheduler attempts to write to execRequestCh first (or is informed of it being closed) before
+		//    it reads from the eecRequestChClosed channel.
+
+		// Next, signal that execRequestCh channel is about to close
+		close(plugin.execRequestChClosed)
+
+		// Now close the channel
+		close(plugin.execRequestCh)
+
+		// Finally, wait for the runner to indicate completion
 		err := <-plugin.runnerDoneCh
 		if err != nil {
 			fmt.Printf("%T runner completed with error: %s\n", plugin.instance, err)
