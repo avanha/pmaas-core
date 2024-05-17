@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"golang.design/x/chann"
 	"pmaas.io/spi/events"
 	"reflect"
 )
@@ -38,7 +39,7 @@ type EventManager struct {
 	runCancelFn        context.CancelFunc
 	runDoneCh          chan error
 	runningCh          chan bool
-	broadcastEventCh   chan broadcastEventRequest
+	broadcastEventCh   *chann.Chann[broadcastEventRequest]
 	addReceiverCh      chan addReceiverRequest
 	removeReceiverCh   chan removeReceiverRequest
 	addReceiverCounter int
@@ -58,7 +59,7 @@ func (em *EventManager) Start() error {
 	doneCh := make(chan error)
 	go em.run(ctx, doneCh)
 	em.runningCh = make(chan bool)
-	em.broadcastEventCh = make(chan broadcastEventRequest)
+	em.broadcastEventCh = chann.New[broadcastEventRequest]()
 	em.addReceiverCh = make(chan addReceiverRequest)
 	em.removeReceiverCh = make(chan removeReceiverRequest)
 	em.runCancelFn = cancelFn
@@ -88,10 +89,15 @@ func (em *EventManager) Stop(ctx context.Context) error {
 }
 
 func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error {
+	// When using an unbuffered chanel, we get a deadlock if an event receiver tries to broadcast an event.
+	// This happens because the event manager goroutine is already busy performing the dispatch, so it
+	// can't receive the request.  We could create a buffered channel, but there's no guarantee about
+	// hitting the buffer limit.  We could save broadcast calls to a queue and process the queue at the end
+	// of dispatch.  Or fire off a goroutine to enqueue them.  I'm going to use xchann unbounded queue.
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
-	case em.broadcastEventCh <- broadcastEventRequest{eventSource: sourceType, event: event}:
+	case em.broadcastEventCh.In() <- broadcastEventRequest{eventSource: sourceType, event: event}:
 		break
 	}
 
@@ -129,15 +135,42 @@ func (em *EventManager) RemoveReceiver(receiverHandle int) error {
 }
 
 func (em *EventManager) run(ctx context.Context, doneCh chan error) {
-	fmt.Printf("EventManager.Run start\n")
+	fmt.Printf("EventManager.run: start\n")
+	fmt.Printf("EventManager.run: Select requests or done signal\n")
 	defer func() { close(doneCh) }()
-
 LOOP1:
 	// Process requests until we receive the done signal
 	for {
 		select {
-		case request := <-em.broadcastEventCh:
+		case request := <-em.broadcastEventCh.Out():
+			fmt.Printf("EventManager.run: handling broadcast event request\n")
 			em.handleBroadcastEvent(request)
+			break
+		case request := <-em.addReceiverCh:
+			fmt.Printf("EventManager.run: handling add receiver request\n")
+			em.handleAddReceiver(&request)
+			break
+		case request := <-em.removeReceiverCh:
+			fmt.Printf("EventManager.run: handling remove receiver request\n")
+			em.handleRemoveReceiver(&request)
+			break
+		case <-ctx.Done():
+			fmt.Printf("EventManager.run: ctx.Done signalled\n")
+			// Close running, which will prevent any more requests
+			close(em.runningCh)
+			break LOOP1
+		}
+		fmt.Printf("EventManager.run: Select requests or done signal\n")
+	}
+
+	fmt.Printf("EventManager.run: Handling remaining requests\n")
+
+	// Consume any events already queued
+LOOP2:
+	for {
+		select {
+		case event := <-em.broadcastEventCh.Out():
+			em.handleBroadcastEvent(event)
 			break
 		case request := <-em.addReceiverCh:
 			em.handleAddReceiver(&request)
@@ -145,32 +178,15 @@ LOOP1:
 		case request := <-em.removeReceiverCh:
 			em.handleRemoveReceiver(&request)
 			break
-		case <-ctx.Done():
-			fmt.Printf("EventManager: ctx.Done signalled\n")
-			// Close running, which will prevent any more requests
-			close(em.runningCh)
-			break LOOP1
-		}
-	}
-
-	// Consume any events already queued
-LOOP2:
-	for {
-		select {
-		case event := <-em.broadcastEventCh:
-			em.handleBroadcastEvent(event)
-			break
-		case request := <-em.addReceiverCh:
-			em.handleAddReceiver(&request)
-			break
 		default:
 			break LOOP2
 		}
+		fmt.Printf("EventManager.run: Select requests\n")
 	}
 
-	close(em.broadcastEventCh)
+	em.broadcastEventCh.Close()
 
-	fmt.Printf("EventManager.Run stop\n")
+	fmt.Printf("EventManager.run: stop\n")
 }
 
 func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
