@@ -12,6 +12,7 @@ import (
 	"os/signal"
 	"reflect"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -35,17 +36,18 @@ type entityRendererRegistration struct {
 }
 
 type pluginWithConfig struct {
-	config              *PluginConfig
-	instance            spi.IPMAASPlugin
-	httpHandlers        []*httpHandlerRegistration
-	entityRenderers     []entityRendererRegistration
-	staticContentDir    string
-	pluginType          reflect.Type
-	execRequestCh       chan func()
-	execRequestChOpen   bool
-	execRequestChClosed chan bool
-	runnerDoneCh        chan error
-	running             bool
+	config               *PluginConfig
+	instance             spi.IPMAASPlugin
+	httpHandlers         []*httpHandlerRegistration
+	entityRenderers      []entityRendererRegistration
+	staticContentDir     string
+	pluginType           reflect.Type
+	execRequestCh        chan func()
+	execRequestChOpen    bool
+	execRequestChClosed  chan bool
+	execRequestChSendOps sync.WaitGroup
+	runnerDoneCh         chan error
+	running              bool
 }
 
 func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
@@ -81,15 +83,19 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 	return nil
 }
 
-func (pwc *pluginWithConfig) execInternal(target func()) (err error) {
-	defer func() {
-		value := recover()
-		if value != nil {
-			err = errors.New(fmt.Sprintf("unable to execute target function, panic during send: %v", value))
-		}
-	}()
+func (pwc *pluginWithConfig) execInternal(target func()) error {
+	var err error = nil
 
-	err = nil
+	// Check if execRequestChClosed to avoid doing any extra work
+	select {
+	case <-pwc.execRequestChClosed:
+		err = errors.New("unable to execute target function, execRequestCh is closed")
+	default:
+		// Channel is probably open
+	}
+
+	pwc.execRequestChSendOps.Add(1)
+	defer pwc.execRequestChSendOps.Done()
 	select {
 	case <-pwc.execRequestChClosed:
 		err = errors.New("unable to execute target function, execRequestCh is closed")
@@ -131,16 +137,17 @@ func NewConfig() *Config {
 
 func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 	var wrapper = &pluginWithConfig{
-		config:              &config,
-		instance:            plugin,
-		httpHandlers:        make([]*httpHandlerRegistration, 0),
-		entityRenderers:     make([]entityRendererRegistration, 0),
-		pluginType:          getPluginType(plugin),
-		execRequestCh:       nil,
-		execRequestChOpen:   false,
-		execRequestChClosed: nil,
-		runnerDoneCh:        nil,
-		running:             false,
+		config:               &config,
+		instance:             plugin,
+		httpHandlers:         make([]*httpHandlerRegistration, 0),
+		entityRenderers:      make([]entityRendererRegistration, 0),
+		pluginType:           getPluginType(plugin),
+		execRequestCh:        nil,
+		execRequestChOpen:    false,
+		execRequestChClosed:  nil,
+		execRequestChSendOps: sync.WaitGroup{},
+		runnerDoneCh:         nil,
+		running:              false,
 	}
 
 	if c.plugins == nil {
@@ -436,9 +443,9 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 		// Next, signal that execRequestCh channel is about to close
 		close(plugin.execRequestChClosed)
 
-		// Sleep tiny bit to allow any goroutines currently attempting to send to detect the close before actually
-		// closing.
-		time.Sleep(1 * time.Millisecond)
+		// Wait for any pending send operation complete.  They'll either complete the send, or bail out on the done
+		// signal.
+		plugin.execRequestChSendOps.Wait()
 
 		// Now close the channel
 		close(plugin.execRequestCh)
