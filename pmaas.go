@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,6 +41,52 @@ type pluginWithConfig struct {
 	entityRenderers  []entityRendererRegistration
 	staticContentDir string
 	pluginType       reflect.Type
+	execRequestCh    chan func()
+	runnerDoneCh     chan error
+	running          bool
+}
+
+func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
+	errCh := make(chan error)
+	f := func() {
+		defer func() { close(errCh) }()
+		errCh <- target()
+	}
+
+	err := pwc.execInternal(f)
+
+	if err != nil {
+		return err
+	}
+
+	return <-errCh
+}
+
+func (pwc *pluginWithConfig) execVoidFn(target func()) error {
+	doneCh := make(chan bool)
+	f := func() {
+		defer func() { close(doneCh) }()
+		target()
+	}
+
+	err := pwc.execInternal(f)
+
+	if err != nil {
+		return err
+	}
+
+	<-doneCh
+	return nil
+}
+
+func (pwc *pluginWithConfig) execInternal(target func()) error {
+	if pwc.execRequestCh == nil {
+		return errors.New("unable to execute target function, execRequestCh is nil")
+	}
+
+	pwc.execRequestCh <- target
+
+	return nil
 }
 
 type Config struct {
@@ -77,6 +124,9 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config PluginConfig) {
 		httpHandlers:    make([]*httpHandlerRegistration, 0),
 		entityRenderers: make([]entityRendererRegistration, 0),
 		pluginType:      getPluginType(plugin),
+		execRequestCh:   nil,
+		runnerDoneCh:    nil,
+		running:         false,
 	}
 
 	if c.plugins == nil {
@@ -192,13 +242,39 @@ func (pmaas *PMAAS) Run() error {
 
 	mainCtx, cancelFn := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancelFn()
+	defer func() {
+		for i := len(pmaas.plugins) - 1; i >= 0; i-- {
+			stopPluginRunner(pmaas.plugins[i])
+		}
+	}()
 
 	fmt.Printf("Initializing...\n")
-	// Init plugins
+
+	// Create a container adapter for each plugin and call Init on the plugin
 	for _, plugin := range pmaas.plugins {
-		plugin.instance.Init(&containerAdapter{
+		plugin.execRequestCh = make(chan func())
+		plugin.runnerDoneCh = make(chan error)
+		ca := &containerAdapter{
 			pmaas:  pmaas,
-			target: plugin})
+			target: plugin}
+		// Spin up a goroutine to execute callbacks on the plugin
+		go func() {
+			fmt.Printf("%T plugin runner START\n", plugin.instance)
+			defer func() {
+				close(plugin.runnerDoneCh)
+				fmt.Printf("%T plugin runner STOP\n", plugin.instance)
+			}()
+			for f := range plugin.execRequestCh {
+				f()
+			}
+		}()
+
+		// Execute the plugin's Init function via the executor
+		err := plugin.execVoidFn(func() { plugin.instance.Init(ca) })
+
+		if err != nil {
+			panic(errors.New(fmt.Sprintf("%T Init failed: %s\n", ca.target.instance, err)))
+		}
 	}
 
 	fmt.Printf("pmaas.Run: Starting core services...\n")
@@ -214,30 +290,43 @@ func (pmaas *PMAAS) Run() error {
 		return err
 	}
 
-	var httpServer *HttpServer
-	httpServer, err = pmaas.startHttpServer()
-	if err != nil {
-		return err
-	}
-
 	fmt.Printf("pmaas.Run: Starting plugins...\n")
+
+	startFailures := 0
 
 	// Start plugins
 	for _, plugin := range pmaas.plugins {
-		plugin.instance.Start()
+		err := plugin.execVoidFn(func() { plugin.instance.Start() })
+		if err == nil {
+			plugin.running = true
+		} else {
+			startFailures = startFailures + 1
+			fmt.Printf("%T failed to start: %s\n", plugin.instance, err)
+		}
 	}
 
-	// Wait for the done signal
-	fmt.Printf("pmaas.Run: Running, waiting for done sginal...\n")
-	<-mainCtx.Done()
+	var httpServer *HttpServer = nil
 
-	fmt.Printf("pmaas.Run: Done sginal recevied, stopping...\n")
+	if startFailures == 0 {
+		httpServer, err = pmaas.startHttpServer()
+		if err == nil {
+			// Wait for the done signal
+			fmt.Printf("pmaas.Run: Running, waiting for done sginal...\n")
+			<-mainCtx.Done()
+			fmt.Printf("pmaas.Run: Done sginal recevied, stopping...\n")
+		} else {
+			fmt.Printf("pmaas.Run: HttpServer start failed: %s\n", err)
+		}
+	}
+
+	if httpServer != nil {
+		stopHttpServer(httpServer)
+	}
+
 	fmt.Printf("pmaas.Run: Stopping plugins...\n")
 	stopPlugins(pmaas.plugins)
 
 	fmt.Printf("pmaas.Run: Stopping core services...\n")
-
-	stopHttpServer(httpServer)
 	stopEntityManager(pmaas.entityManager)
 	stopEventManager(pmaas.eventManager)
 
@@ -300,8 +389,29 @@ func stopEventManager(eventManager *EventManager) {
 }
 
 func stopPlugins(plugins []*pluginWithConfig) {
-	for _, plugin := range plugins {
-		plugin.instance.Stop()
+	for i := len(plugins) - 1; i >= 0; i-- {
+		plugin := plugins[i]
+		if plugin.running {
+			err := plugin.execVoidFn(func() { plugin.instance.Stop() })
+			plugin.running = false
+			if err != nil {
+				fmt.Printf("%T Stop failed: %s\n", plugin.instance, err)
+			}
+		}
+		stopPluginRunner(plugin)
+	}
+}
+
+func stopPluginRunner(plugin *pluginWithConfig) {
+	if plugin.execRequestCh != nil {
+		ch := plugin.execRequestCh
+		plugin.execRequestCh = nil
+		close(ch)
+
+		err := <-plugin.runnerDoneCh
+		if err != nil {
+			fmt.Printf("%T runner completed with error: %s\n", plugin.instance, err)
+		}
 	}
 }
 
@@ -506,10 +616,10 @@ func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, event any) er
 }
 
 func (pmaas *PMAAS) registerEventReceiver(
-	_ *pluginWithConfig,
+	sourcePlugin *pluginWithConfig,
 	predicate events.EventPredicate,
 	receiver events.EventReceiver) (int, error) {
-	return pmaas.eventManager.AddReceiver(predicate, receiver)
+	return pmaas.eventManager.AddReceiver(sourcePlugin, predicate, receiver)
 }
 
 func (pmaas *PMAAS) deregisterEventReceiver(
