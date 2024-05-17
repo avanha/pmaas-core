@@ -81,8 +81,15 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 	return nil
 }
 
-func (pwc *pluginWithConfig) execInternal(target func()) error {
-	var err error = nil
+func (pwc *pluginWithConfig) execInternal(target func()) (err error) {
+	defer func() {
+		value := recover()
+		if value != nil {
+			err = errors.New(fmt.Sprintf("unable to execute target function, panic during send: %v", value))
+		}
+	}()
+
+	err = nil
 	select {
 	case <-pwc.execRequestChClosed:
 		err = errors.New("unable to execute target function, execRequestCh is closed")
@@ -421,9 +428,17 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 		// 2. We close execRequestChClosed, then execRequestCh
 		// 3. However, the scheduler attempts to write to execRequestCh first (or is informed of it being closed) before
 		//    it reads from the eecRequestChClosed channel.
+		// Based on a simple test, it turns out that this is a possible error.  Adding in a tiny pause to allow any
+		// goroutines currently waiting on the send to detect the close before closing appears to work, but is hacky.
+		// We probably need to deal with the potential panic from the write to closed channel.
+		// I think the only alternative is to use an actual lock.
 
 		// Next, signal that execRequestCh channel is about to close
 		close(plugin.execRequestChClosed)
+
+		// Sleep tiny bit to allow any goroutines currently attempting to send to detect the close before actually
+		// closing.
+		time.Sleep(1 * time.Millisecond)
 
 		// Now close the channel
 		close(plugin.execRequestCh)
