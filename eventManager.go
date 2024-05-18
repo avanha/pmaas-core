@@ -19,6 +19,7 @@ func (r broadcastEventRequest) String() string {
 }
 
 type addReceiverRequest struct {
+	plugin    *pluginWithConfig
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 	resultCh  chan int
@@ -31,6 +32,7 @@ type removeReceiverRequest struct {
 
 type receiverRecord struct {
 	handle    int
+	plugin    *pluginWithConfig
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 }
@@ -104,14 +106,17 @@ func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error
 	return nil
 }
 
-func (em *EventManager) AddReceiver(predicate events.EventPredicate, receiver events.EventReceiver) (int, error) {
+func (em *EventManager) AddReceiver(
+	plugin *pluginWithConfig,
+	predicate events.EventPredicate,
+	receiver events.EventReceiver) (int, error) {
 	resultCh := make(chan int)
 
 	select {
 	case <-em.runningCh:
 		close(resultCh)
 		return 0, errors.New("unable to add event receiver, EventManager is no longer accepting requests")
-	case em.addReceiverCh <- addReceiverRequest{predicate: predicate, receiver: receiver, resultCh: resultCh}:
+	case em.addReceiverCh <- addReceiverRequest{plugin: plugin, predicate: predicate, receiver: receiver, resultCh: resultCh}:
 		break
 	}
 
@@ -199,7 +204,7 @@ func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 
 	for _, record := range em.receivers {
 		if record.predicate(eventInfo) {
-			err := record.receiver(eventInfo)
+			err := record.plugin.execErrorFn(func() error { return record.receiver(eventInfo) })
 
 			if err != nil {
 				fmt.Printf(
@@ -218,7 +223,11 @@ func (em *EventManager) handleAddReceiver(request *addReceiverRequest) {
 	// event type wild card.
 	handle := em.addReceiverCounter + 1
 	em.addReceiverCounter = handle
-	record := receiverRecord{handle: handle, predicate: request.predicate, receiver: request.receiver}
+	record := receiverRecord{
+		handle:    handle,
+		plugin:    request.plugin,
+		predicate: request.predicate,
+		receiver:  request.receiver}
 	em.receivers[handle] = record
 	request.resultCh <- handle
 }
