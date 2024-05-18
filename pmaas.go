@@ -225,8 +225,8 @@ func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
 	ca.target.staticContentDir = staticContentDir
 }
 
-func (ca *containerAdapter) RegisterEntity(uniqueData string, entityType reflect.Type) (string, error) {
-	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType)
+func (ca *containerAdapter) RegisterEntity(uniqueData string, entityType reflect.Type, name string) (string, error) {
+	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name)
 }
 
 func (ca *containerAdapter) DeregisterEntity(id string) error {
@@ -636,7 +636,8 @@ func (pmaas *PMAAS) getEntityRenderer(_ *pluginWithConfig, entityType reflect.Ty
 func (pmaas *PMAAS) registerEntity(
 	sourcePlugin *pluginWithConfig,
 	uniqueData string,
-	entityType reflect.Type) (string, error) {
+	entityType reflect.Type,
+	name string) (string, error) {
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.pluginType.PkgPath(), sourcePlugin.pluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
 	err := pmaas.entityManager.AddEntity(id, entityType)
@@ -645,7 +646,7 @@ func (pmaas *PMAAS) registerEntity(
 		return "", err
 	}
 
-	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType}}
+	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}}
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, event)
 
 	if err != nil {
