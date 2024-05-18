@@ -89,18 +89,25 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 	// The solution here is inspired by "multiple senders one receiver" at
 	// https://go101.org/article/channel-closing.html
 
-	// Check if execRequestChClosed to avoid doing any extra work
-	select {
-	case <-pwc.execRequestChClosed:
-		err = errors.New("unable to execute target function, execRequestCh is closed")
-	default:
-		// Channel is probably open
-	}
-
 	// Indicate that a send attempt is in progress to avoid having the channel closed while it's
 	// used in the select statement.
 	pwc.execRequestChSendOps.Add(1)
 	defer pwc.execRequestChSendOps.Done()
+
+	// Check if execRequestChClosed to avoid doing any extra work
+	select {
+	case <-pwc.execRequestChClosed:
+		err = errors.New("unable to execute target function, execRequestCh is closed")
+		break
+	default:
+		// Channel is probably open
+		break
+	}
+
+	if err != nil {
+		return err
+	}
+
 	select {
 	case <-pwc.execRequestChClosed:
 		err = errors.New("unable to execute target function, execRequestCh is closed")
