@@ -108,6 +108,8 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		return err
 	}
 
+	fmt.Printf("Attempting to send to execRequestCh\n")
+
 	select {
 	case <-pwc.execRequestChClosed:
 		err = errors.New("unable to execute target function, execRequestCh is closed")
@@ -115,6 +117,8 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 	case pwc.execRequestCh <- target:
 		break
 	}
+
+	fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
 }
@@ -241,6 +245,14 @@ func (ca *containerAdapter) RegisterEventReceiver(
 
 func (ca *containerAdapter) DeregisterEventReceiver(handle int) error {
 	return ca.pmaas.deregisterEventReceiver(ca.target, handle)
+}
+
+func (ca *containerAdapter) ExecOnPluginGoRoutine(f func()) error {
+	return ca.target.execVoidFn(f)
+}
+
+func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
+	return ca.target.execInternal(f)
 }
 
 type PMAAS struct {
