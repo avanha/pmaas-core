@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"golang.design/x/chann"
 	"pmaas.io/spi/events"
 	"reflect"
 )
@@ -38,10 +37,11 @@ type receiverRecord struct {
 }
 
 type EventManager struct {
-	runCancelFn        context.CancelFunc
-	runDoneCh          chan error
-	runningCh          chan bool
-	broadcastEventCh   *chann.Chann[broadcastEventRequest]
+	runCancelFn context.CancelFunc
+	runDoneCh   chan error
+	runningCh   chan bool
+	//broadcastEventCh   *chann.Chann[broadcastEventRequest]
+	broadcastEventCh   chan broadcastEventRequest
 	addReceiverCh      chan addReceiverRequest
 	removeReceiverCh   chan removeReceiverRequest
 	addReceiverCounter int
@@ -61,7 +61,8 @@ func (em *EventManager) Start() error {
 	doneCh := make(chan error)
 	go em.run(ctx, doneCh)
 	em.runningCh = make(chan bool)
-	em.broadcastEventCh = chann.New[broadcastEventRequest]()
+	//em.broadcastEventCh = chann.New[broadcastEventRequest]()
+	em.broadcastEventCh = make(chan broadcastEventRequest, 100)
 	em.addReceiverCh = make(chan addReceiverRequest)
 	em.removeReceiverCh = make(chan removeReceiverRequest)
 	em.runCancelFn = cancelFn
@@ -95,11 +96,14 @@ func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error
 	// This happens because the event manager goroutine is already busy performing the dispatch, so it
 	// can't receive the request.  We could create a buffered channel, but there's no guarantee about
 	// hitting the buffer limit.  We could save broadcast calls to a queue and process the queue at the end
-	// of dispatch.  Or fire off a goroutine to enqueue them.  I'm going to use xchann unbounded queue.
+	// of dispatch.  Or fire off a goroutine to enqueue them. I'm going to use xchann unbounded queue.
+	// Update: The xchan implementation has some sort of race condition that makes it occasionally crash
+	// on startup.  I'm gonna switch back to a regular buffered channel.
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
-	case em.broadcastEventCh.In() <- broadcastEventRequest{eventSource: sourceType, event: event}:
+	//case em.broadcastEventCh.In() <- broadcastEventRequest{eventSource: sourceType, event: event}:
+	case em.broadcastEventCh <- broadcastEventRequest{eventSource: sourceType, event: event}:
 		break
 	}
 
@@ -143,38 +147,41 @@ func (em *EventManager) run(ctx context.Context, doneCh chan error) {
 	fmt.Printf("EventManager.run: start\n")
 	fmt.Printf("EventManager.run: Select requests or done signal\n")
 	defer func() { close(doneCh) }()
-LOOP1:
+
 	// Process requests until we receive the done signal
-	for {
+	for run := true; run; {
 		select {
-		case request := <-em.broadcastEventCh.Out():
-			fmt.Printf("EventManager.run: handling broadcast event request\n")
+		//case request := <-em.broadcastEventCh.Out():
+		case request := <-em.broadcastEventCh:
+			//fmt.Printf("EventManager.run: handling broadcast event request\n")
 			em.handleBroadcastEvent(request)
 			break
 		case request := <-em.addReceiverCh:
-			fmt.Printf("EventManager.run: handling add receiver request\n")
+			//fmt.Printf("EventManager.run: handling add receiver request\n")
 			em.handleAddReceiver(&request)
 			break
 		case request := <-em.removeReceiverCh:
-			fmt.Printf("EventManager.run: handling remove receiver request\n")
+			//fmt.Printf("EventManager.run: handling remove receiver request\n")
 			em.handleRemoveReceiver(&request)
 			break
 		case <-ctx.Done():
 			fmt.Printf("EventManager.run: ctx.Done signalled\n")
 			// Close running, which will prevent any more requests
 			close(em.runningCh)
-			break LOOP1
+			run = false
+			break
 		}
-		fmt.Printf("EventManager.run: Select requests or done signal\n")
+		//fmt.Printf("EventManager.run: Select requests or done signal\n")
 	}
 
 	fmt.Printf("EventManager.run: Handling remaining requests\n")
 
 	// Consume any events already queued
-LOOP2:
-	for {
+
+	for run := true; run; {
 		select {
-		case event := <-em.broadcastEventCh.Out():
+		//case event := <-em.broadcastEventCh.Out():
+		case event := <-em.broadcastEventCh:
 			em.handleBroadcastEvent(event)
 			break
 		case request := <-em.addReceiverCh:
@@ -184,12 +191,11 @@ LOOP2:
 			em.handleRemoveReceiver(&request)
 			break
 		default:
-			break LOOP2
+			run = false
+			break
 		}
-		fmt.Printf("EventManager.run: Select requests\n")
+		//fmt.Printf("EventManager.run: Select requests\n")
 	}
-
-	em.broadcastEventCh.Close()
 
 	fmt.Printf("EventManager.run: stop\n")
 }
