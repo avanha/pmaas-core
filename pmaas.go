@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -41,6 +42,7 @@ type pluginWithConfig struct {
 	httpHandlers         []*httpHandlerRegistration
 	entityRenderers      []entityRendererRegistration
 	staticContentDir     string
+	contentFS            fs.FS
 	pluginType           reflect.Type
 	execRequestCh        chan func()
 	execRequestChOpen    bool
@@ -130,7 +132,7 @@ type Config struct {
 }
 
 type dirWithLogger struct {
-	delegate http.Dir
+	delegate http.FileSystem
 }
 
 func (dwl dirWithLogger) Open(name string) (http.File, error) {
@@ -227,6 +229,10 @@ func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.Enti
 
 func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
 	ca.target.staticContentDir = staticContentDir
+}
+
+func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS) {
+	ca.target.contentFS = contentFS
 }
 
 func (ca *containerAdapter) RegisterEntity(uniqueData string, entityType reflect.Type, name string) (string, error) {
@@ -460,8 +466,8 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 		// Next, signal that execRequestCh channel is about to close
 		close(plugin.execRequestChClosed)
 
-		// Wait for any pending send operations complete.  They'll either complete the send, or bail out on the done
-		// signal.
+		// Wait for any pending send operations complete.  They'll either complete the send operations, or bail out on
+		// the done signal.
 		plugin.execRequestChSendOps.Wait()
 
 		// Now close the channel
@@ -477,17 +483,49 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 
 func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *pluginWithConfig, serveMux *http.ServeMux) {
 	pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
-	staticContentDir := pmaas.getContentRoot(plugin) + "/" + plugin.staticContentDir
-	_, err := os.Stat(staticContentDir)
+	pluginContentFS, prefixPath, staticContentDir := pmaas.getContentFS(plugin)
 
-	if err == nil {
-		fmt.Printf("Serving %s from %s\n", pluginPath, staticContentDir)
-		serveMux.Handle(pluginPath,
-			http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.Dir(staticContentDir)})))
-		serveMux.HandleFunc(pluginPath+"hello", hello)
-	} else {
-		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+	if pluginContentFS == nil {
+		fmt.Printf("Unable to serve static content for %s, plugin did not provide an fs.FS instance\n", pluginPath)
+		return
 	}
+
+	pluginContentReadDirFs, ok := pluginContentFS.(fs.ReadDirFS)
+
+	if !ok {
+		fmt.Printf("Unable to serve static content for %s, fs.FS instance provided by plugin does not "+
+			"implement fs.ReadDirFS\n", pluginPath)
+		return
+	}
+
+	// Embedded files are rooted under a content dir.  However, plugins configured with a content path override point
+	// at the content folder directly.
+	var staticPath string
+
+	if prefixPath == "" {
+		staticPath = plugin.staticContentDir
+	} else {
+		staticPath = prefixPath + "/" + plugin.staticContentDir
+	}
+	_, err := pluginContentReadDirFs.ReadDir(staticPath)
+
+	if err != nil {
+		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+		return
+	}
+
+	pluginStaticContentFS, err := fs.Sub(pluginContentFS, staticPath)
+
+	if err != nil {
+		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+		return
+	}
+
+	fmt.Printf("Serving static content for %s from %s\n",
+		pluginPath, staticContentDir+"/"+plugin.staticContentDir)
+	serveMux.Handle(pluginPath,
+		http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.FS(pluginStaticContentFS)})))
+	serveMux.HandleFunc(pluginPath+"hello", hello)
 }
 
 func (pmaas *PMAAS) renderList(_ *pluginWithConfig, w http.ResponseWriter, r *http.Request,
@@ -545,15 +583,26 @@ func (pmaas *PMAAS) getTemplate(
 		panic("No instance IPMAASTemplateEnginePlugin available")
 	}
 
-	root := pmaas.getContentRoot(sourcePlugin)
+	contentFS, prefixPath, contentFSDescription := pmaas.getContentFS(sourcePlugin)
+
+	if contentFS == nil {
+		panic(fmt.Sprintf("No fs.FS implementation available for plugin %s", pmaas.getPluginPath(sourcePlugin)))
+	} else {
+		fmt.Printf("Loading template %s from %s\n", templateInfo.Name, contentFSDescription)
+	}
+
+	if prefixPath != "" {
+		var err error
+		contentFS, err = fs.Sub(contentFS, prefixPath)
+
+		if err != nil {
+			panic(fmt.Sprintf("Unable to construct subFS implementation available for plugin %s", pmaas.getPluginPath(sourcePlugin)))
+		}
+	}
+
 	webPath := "/" + pmaas.getPluginPath(sourcePlugin)
-	updatedPaths := make([]string, len(templateInfo.Paths))
 	updatedScripts := make([]string, len(templateInfo.Scripts))
 	updatedStyles := make([]string, len(templateInfo.Styles))
-
-	for i, path := range templateInfo.Paths {
-		updatedPaths[i] = root + "/" + path
-	}
 
 	for i, script := range templateInfo.Scripts {
 		updatedScripts[i] = webPath + "/" + script
@@ -564,11 +613,12 @@ func (pmaas *PMAAS) getTemplate(
 	}
 
 	updatedTemplateInfo := spi.TemplateInfo{
-		Name:    templateInfo.Name,
-		FuncMap: templateInfo.FuncMap,
-		Paths:   updatedPaths,
-		Scripts: updatedScripts,
-		Styles:  updatedStyles,
+		Name:     templateInfo.Name,
+		FuncMap:  templateInfo.FuncMap,
+		Paths:    templateInfo.Paths,
+		Scripts:  updatedScripts,
+		Styles:   updatedStyles,
+		SourceFS: contentFS,
 	}
 
 	return templateEnginePlugin.GetTemplate(&updatedTemplateInfo)
@@ -579,18 +629,28 @@ func (pmaas *PMAAS) getPluginPath(plugin *pluginWithConfig) string {
 	return pluginType.PkgPath() + "/" + pluginType.Name()
 }
 
-func (pmaas *PMAAS) getContentRoot(plugin *pluginWithConfig) string {
-	var root string
+func (pmaas *PMAAS) getContentFS(plugin *pluginWithConfig) (fs.FS, string, string) {
 
-	if plugin.config.ContentPathOverride == "" {
-		root = pmaas.config.ContentPathRoot
-		pluginPath := pmaas.getPluginPath(plugin)
-		root = root + "/" + pluginPath
-	} else {
-		root = plugin.config.ContentPathOverride
+	if plugin.config.ContentPathOverride != "" {
+		// The plugin config provided a path
+		contentFs := os.DirFS(plugin.config.ContentPathOverride)
+		return contentFs, "", fmt.Sprintf("os.DirFS(%s)", plugin.config.ContentPathOverride)
 	}
 
-	return root
+	if pmaas.config.ContentPathRoot != "" {
+		// The server has a configured content root.  Does it have content for this plugin?
+		pluginPath := pmaas.getPluginPath(plugin)
+		pluginContentDir := pmaas.config.ContentPathRoot + "/" + pluginPath
+		fileInfo, err := os.Stat(pluginContentDir)
+
+		if err == nil && fileInfo.IsDir() {
+			// It does, so let's use it
+			contentFs := os.DirFS(pluginContentDir)
+			return contentFs, "", fmt.Sprintf("os.DirFS(%s)", pluginContentDir)
+		}
+	}
+
+	return plugin.contentFS, "content", fmt.Sprintf("%T(providedByPlugin)", plugin.contentFS)
 }
 
 func (pmaas *PMAAS) getEntityRenderer(_ *pluginWithConfig, entityType reflect.Type) (spi.EntityRenderer, error) {
