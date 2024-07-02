@@ -110,7 +110,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		return err
 	}
 
-	fmt.Printf("Attempting to send to execRequestCh\n")
+	//fmt.Printf("Attempting to send to execRequestCh\n")
 
 	select {
 	case <-pwc.execRequestChClosed:
@@ -120,7 +120,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		break
 	}
 
-	fmt.Printf("Completed send to execRequestCh\n")
+	//fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
 }
@@ -584,12 +584,12 @@ func (pmaas *PMAAS) getTemplate(
 		panic("No instance IPMAASTemplateEnginePlugin available")
 	}
 
-	contentFS, contentFSDescription := pmaas.getContentFS(sourcePlugin)
+	contentFS, _ := pmaas.getContentFS(sourcePlugin)
 
 	if contentFS == nil {
 		panic(fmt.Sprintf("No fs.FS implementation available for plugin %s", pmaas.getPluginPath(sourcePlugin)))
 	} else {
-		fmt.Printf("Loading template %s from %s\n", templateInfo.Name, contentFSDescription)
+		//fmt.Printf("Loading template %s from %s\n", templateInfo.Name, contentFSDescription)
 	}
 
 	webPath := "/" + pmaas.getPluginPath(sourcePlugin)
