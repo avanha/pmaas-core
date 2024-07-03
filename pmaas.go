@@ -37,19 +37,35 @@ type entityRendererRegistration struct {
 }
 
 type pluginWithConfig struct {
-	config               *PluginConfig
-	instance             spi.IPMAASPlugin
-	httpHandlers         []*httpHandlerRegistration
-	entityRenderers      []entityRendererRegistration
-	staticContentDir     string
-	contentFS            fs.FS
-	pluginType           reflect.Type
-	execRequestCh        chan func()
-	execRequestChOpen    bool
-	execRequestChClosed  chan bool
+	config           *PluginConfig
+	instance         spi.IPMAASPlugin
+	httpHandlers     []*httpHandlerRegistration
+	entityRenderers  []entityRendererRegistration
+	staticContentDir string
+	contentFS        fs.FS
+	pluginType       reflect.Type
+	running          bool
+
+	// A channel for work to execute on the plugin runner goroutine
+	execRequestCh chan func()
+
+	// A channel that is closed when the plugin runner goroutine needs to stop, and doesn't want any further writes to
+	// execRequestCh.  This is checked by the sender.
+	execRequestChClosed chan bool
+
+	// A boolean that tracks whether execRequestCh is open.  This is needed because the main pmaas Run function calls
+	// stopPluginRunner multiple times. Under normal execution, when the plugin is stopped, but there's also a fallback
+	// deferred execution fom the main Run function.
+	execRequestChOpen bool
+
+	// A WaitGroup that counts the number of senders currently trying to write to execRequestCh. The stopPluginRunner
+	// function wait for this to be zero before actually closing execRequestCh.  This ensures that no writes to a closed
+	// channel can take place.  All senders will have either completed their write, or detected that a stop is in
+	// progress, via execRequestChClosed.
 	execRequestChSendOps sync.WaitGroup
-	runnerDoneCh         chan error
-	running              bool
+
+	// A channel that is closed when the plugin runner goroutine is about to complete.
+	runnerDoneCh chan error
 }
 
 func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
@@ -294,7 +310,7 @@ func NewPMAAS(config *Config) *PMAAS {
 func hello(w http.ResponseWriter, _ *http.Request) {
 	_, err := io.WriteString(w, "Hello!\n")
 	if err != nil {
-		fmt.Printf("Error writing resposne: %V\n", err)
+		fmt.Printf("Error writing resposne: %v\n", err)
 	}
 }
 

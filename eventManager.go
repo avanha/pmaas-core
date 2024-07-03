@@ -200,6 +200,9 @@ func (em *EventManager) run(ctx context.Context, doneCh chan error) {
 	fmt.Printf("EventManager.run: stop\n")
 }
 
+// handleBroadcastEvent Delivers an event to registered receivers.  It executes each registration's predicate, and
+// if the predicate returns true, executes the registration's callback function via the plugin's plugin runner
+// goroutine.  Since the predicate executes directly, it's imperative that it's fast.
 func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 	fmt.Printf("EventManager: Broadcasting event, %v\n", request)
 
