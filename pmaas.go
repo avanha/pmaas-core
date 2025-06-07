@@ -46,7 +46,7 @@ type pluginWithConfig struct {
 	pluginType       reflect.Type
 	running          bool
 
-	// A channel for work to execute on the plugin runner goroutine
+	// An unbuffered channel for work to execute on the plugin runner goroutine
 	execRequestCh chan func()
 
 	// A channel that is closed when the plugin runner goroutine needs to stop, and doesn't want any further writes to
@@ -59,7 +59,7 @@ type pluginWithConfig struct {
 	execRequestChOpen bool
 
 	// A WaitGroup that counts the number of senders currently trying to write to execRequestCh. The stopPluginRunner
-	// function wait for this to be zero before actually closing execRequestCh.  This ensures that no writes to a closed
+	// function waits for this to be zero before actually closing execRequestCh.  This ensures that no writes to a closed
 	// channel can take place.  All senders will have either completed their write, or detected that a stop is in
 	// progress, via execRequestChClosed.
 	execRequestChSendOps sync.WaitGroup
@@ -68,6 +68,8 @@ type pluginWithConfig struct {
 	runnerDoneCh chan error
 }
 
+// Executes a function that returns an error using the plugin's plugin runner goroutine.  Returns
+// after execution completes, or early, if there was a problem enqueueing.
 func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
 	errCh := make(chan error)
 	f := func() {
@@ -84,6 +86,8 @@ func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
 	return <-errCh
 }
 
+// Executes a function that doesn't return anything on the plugin's plugin runner goroutine.
+// Returns after execution completes, or early, if there was a problem enqueueing.
 func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 	doneCh := make(chan bool)
 	f := func() {
@@ -101,6 +105,9 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 	return nil
 }
 
+// Enqueues the specified function to execute on the plugin's runner thread.  Returns an error
+// if the function cannot be enqueued, for example when the runner has stopped accepting requests
+// as part of the shutdown process.
 func (pwc *pluginWithConfig) execInternal(target func()) error {
 	var err error = nil
 
@@ -112,13 +119,16 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 	pwc.execRequestChSendOps.Add(1)
 	defer pwc.execRequestChSendOps.Done()
 
-	// Check if execRequestChClosed to avoid doing any extra work
+	// Check execRequestChClosed channel to avoid doing any extra work.
 	select {
 	case <-pwc.execRequestChClosed:
+		// This means the read operation completed immediately, because either there was a value,
+		// or the channel is closed.  We don't care about the value, the channel is never written
+		// to, closed.
 		err = errors.New("unable to execute target function, execRequestCh is closed")
 		break
 	default:
-		// Channel is probably open
+		// There was no value, nor immediate return, which means the channel is probably open
 		break
 	}
 
@@ -128,6 +138,9 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 
 	//fmt.Printf("Attempting to send to execRequestCh\n")
 
+	// Either enqueue the callback or return an error if execRequestChClosed.  That should
+	// not happen, since closing is guarded by the execRequestChSendOps WaitGroup, but this
+	// will defensively avoid a lockup or send on a closed channel.
 	select {
 	case <-pwc.execRequestChClosed:
 		err = errors.New("unable to execute target function, execRequestCh is closed")
@@ -201,8 +214,9 @@ func getPluginType(plugin spi.IPMAASPlugin) reflect.Type {
 	return pluginType
 }
 
-// A containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the PMAAS server along
-// with the plugin instance and its config.  This allows us to track the plugin calling into the server.
+// containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the
+// PMAAS server along with the plugin instance and its config.  This allows us to track the
+// plugin calling into the PMAAS server.
 type containerAdapter struct {
 	pmaas  *PMAAS
 	target *pluginWithConfig
@@ -327,28 +341,18 @@ func (pmaas *PMAAS) Run() error {
 
 	fmt.Printf("Initializing...\n")
 
-	// Create a container adapter for each plugin and call Init on the plugin
+	// Start an initialize each plugin
 	for _, plugin := range pmaas.plugins {
-		plugin.execRequestCh = make(chan func())
-		plugin.execRequestChOpen = true
-		plugin.execRequestChClosed = make(chan bool)
-		plugin.runnerDoneCh = make(chan error)
+		// Start the plugin's plugin runner goroutine, and call Init on the plugin
+		pmaas.startPluginRunner(plugin)
+
+		// Create a container adapter
 		ca := &containerAdapter{
 			pmaas:  pmaas,
 			target: plugin}
-		// Spin up a goroutine to execute callbacks on the plugin
-		go func() {
-			fmt.Printf("%T plugin runner START\n", plugin.instance)
-			defer func() {
-				close(plugin.runnerDoneCh)
-				fmt.Printf("%T plugin runner STOP\n", plugin.instance)
-			}()
-			for f := range plugin.execRequestCh {
-				f()
-			}
-		}()
 
-		// Execute the plugin's Init function via the executor
+		// Synchronously execute the plugin's Init function via the plugin's plugin runner
+		// goroutine, passing it the container adapter.
 		err := plugin.execVoidFn(func() { plugin.instance.Init(ca) })
 
 		if err != nil {
@@ -481,6 +485,30 @@ func stopPlugins(plugins []*pluginWithConfig) {
 	}
 }
 
+func (pmaas *PMAAS) startPluginRunner(plugin *pluginWithConfig) {
+	// Initialize the runner control members
+	plugin.execRequestCh = make(chan func())
+	plugin.execRequestChOpen = true
+	plugin.execRequestChClosed = make(chan bool)
+	plugin.runnerDoneCh = make(chan error)
+
+	// Spin up a goroutine to execute callbacks for the plugin.
+	go func() {
+		fmt.Printf("%T plugin runner START\n", plugin.instance)
+		// Signal completion before exiting.
+		defer func() {
+			close(plugin.runnerDoneCh)
+			fmt.Printf("%T plugin runner STOP\n", plugin.instance)
+		}()
+
+		// Just keep executing until the channel closes.
+		for f := range plugin.execRequestCh {
+			f()
+		}
+	}()
+
+}
+
 func stopPluginRunner(plugin *pluginWithConfig) {
 	if plugin.execRequestChOpen {
 		// Mark that execRequestCh is no longer open, so we don't try to close it twice
@@ -496,7 +524,7 @@ func stopPluginRunner(plugin *pluginWithConfig) {
 		// the done signal.
 		plugin.execRequestChSendOps.Wait()
 
-		// Now close the channel
+		// Close the channel
 		close(plugin.execRequestCh)
 
 		// Finally, wait for the runner to indicate completion

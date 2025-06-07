@@ -20,14 +20,20 @@ The idea is that other plugins can register to receive entity add/remove events.
 We probably don't want to store the entities themselves to avoid leaks.  Rather other
 plugins can use the IDs to obtain information about them (or some kind of reference).
 
+#### 2025-06-08
+I updated threading model as described in the previous entry.  The one difference from the
+original plan is that all lifecycle, including init go through the plugin's plugin runner
+goroutine.  pluginWithConfig exposes internal methods that allow both sync & async callback 
+execution and the server uses sync for the call to Init. 
+
 #### 2024-05-09
 I've been thinking about the threading model.  Currently, to be safe incoming function
 calls may come in on arbitrary goroutine.  To get around it, I've been implementing,
 or planning to implement channels that will invoke the logic on the plugin's goroutine.
 
-However, that's a lot of repetitive complexity on each plugin.  I was thinking that the
-core could run the lifecycle of each plugin in its own goroutine, and implement the
-channel mechanism to execute callbacks in the plugin's goroutine. 
+However, that's a lot of repetitive complexity on each plugin.  Instead the
+core could run the plugin lifecycle methods in each plugin's own goroutine, and implement the
+channel mechanism to execute callbacks in the plugin's goroutine.
 
 The lifecycle would look something like this:
 
@@ -39,4 +45,4 @@ to complete init before start is called.  Provider (i.e. renderer) registration 
 complete before start so plugins can use them.
 
 Complex plugins that want more control over their concurrency could configure the core to
-skip the channel transfer and just invoke th callback directly.
+skip the channel transfer and just invoke the callback directly.
