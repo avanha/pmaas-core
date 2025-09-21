@@ -27,11 +27,11 @@ goroutine.  pluginWithConfig exposes internal methods that allow both sync & asy
 execution and the server uses sync for the call to Init. 
 
 #### 2024-05-09
-I've been thinking about the threading model.  Currently, to be safe incoming function
+I've been thinking about the threading model.  Currently, to be safe, incoming function
 calls may come in on arbitrary goroutine.  To get around it, I've been implementing,
 or planning to implement channels that will invoke the logic on the plugin's goroutine.
 
-However, that's a lot of repetitive complexity on each plugin.  Instead the
+However, that's a lot of repetitive complexity on each plugin.  Instead, the
 core could run the plugin lifecycle methods in each plugin's own goroutine, and implement the
 channel mechanism to execute callbacks in the plugin's goroutine.
 
