@@ -106,7 +106,7 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 }
 
 // Enqueues the specified function to execute on the plugin's runner thread.  Returns an error
-// if the function cannot be enqueued, for example when the runner has stopped accepting requests
+// if the function cannot be enqueued, for example, when the runner has stopped accepting requests
 // as part of the shutdown process.
 func (pwc *pluginWithConfig) execInternal(target func()) error {
 	var err error = nil
@@ -136,7 +136,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		return err
 	}
 
-	//fmt.Printf("Attempting to send to execRequestCh\n")
+	fmt.Printf("Attempting to send to execRequestCh\n")
 
 	// Either enqueue the callback or return an error if execRequestChClosed.  That should
 	// not happen, since closing is guarded by the execRequestChSendOps WaitGroup, but this
@@ -149,7 +149,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		break
 	}
 
-	//fmt.Printf("Completed send to execRequestCh\n")
+	fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
 }
@@ -341,7 +341,7 @@ func (pmaas *PMAAS) Run() error {
 
 	fmt.Printf("Initializing...\n")
 
-	// Start an initialize each plugin
+	// Start and initialize each plugin
 	for _, plugin := range pmaas.plugins {
 		// Start the plugin's plugin runner goroutine, and call Init on the plugin
 		pmaas.startPluginRunner(plugin)
