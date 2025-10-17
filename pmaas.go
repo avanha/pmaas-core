@@ -54,14 +54,14 @@ type pluginWithConfig struct {
 	execRequestChClosed chan bool
 
 	// A boolean that tracks whether execRequestCh is open.  This is needed because the main pmaas Run function calls
-	// stopPluginRunner multiple times. Under normal execution, when the plugin is stopped, but there's also a fallback
-	// deferred execution fom the main Run function.
+	// stopPluginRunner multiple times. Under normal execution, when the plugin is stopped, but there's also a fall-back
+	// deferred execution from the main Run function.
 	execRequestChOpen bool
 
 	// A WaitGroup that counts the number of senders currently trying to write to execRequestCh. The stopPluginRunner
-	// function waits for this to be zero before actually closing execRequestCh.  This ensures that no writes to a closed
-	// channel can take place.  All senders will have either completed their write, or detected that a stop is in
-	// progress, via execRequestChClosed.
+	// function waits for this to be zero before actually closing execRequestCh.  This ensures that no writes to a
+	// closed channel can take place.  All senders will have either completed their write operation, or detected that a
+	// stop is in progress, via execRequestChClosed.
 	execRequestChSendOps sync.WaitGroup
 
 	// A channel that is closed when the plugin runner goroutine is about to complete.
@@ -114,7 +114,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 	// The solution here is inspired by "multiple senders one receiver" at
 	// https://go101.org/article/channel-closing.html
 
-	// Indicate that a send attempt is in progress to avoid having the channel closed while it's
+	// Indicate that a send operation is in progress to avoid having the channel closed while it's
 	// used in the select statement.
 	pwc.execRequestChSendOps.Add(1)
 	defer pwc.execRequestChSendOps.Done()
@@ -124,7 +124,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 	case <-pwc.execRequestChClosed:
 		// This means the read operation completed immediately, because either there was a value,
 		// or the channel is closed.  We don't care about the value, the channel is never written
-		// to, closed.
+		// to, only closed.
 		err = errors.New("unable to execute target function, execRequestCh is closed")
 		break
 	default:
@@ -136,7 +136,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		return err
 	}
 
-	fmt.Printf("Attempting to send to execRequestCh\n")
+	//fmt.Printf("Attempting to send to execRequestCh\n")
 
 	// Either enqueue the callback or return an error if execRequestChClosed.  That should
 	// not happen, since closing is guarded by the execRequestChSendOps WaitGroup, but this
@@ -149,7 +149,7 @@ func (pwc *pluginWithConfig) execInternal(target func()) error {
 		break
 	}
 
-	fmt.Printf("Completed send to execRequestCh\n")
+	//fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
 }
@@ -475,14 +475,50 @@ func stopPlugins(plugins []*pluginWithConfig) {
 	for i := len(plugins) - 1; i >= 0; i-- {
 		plugin := plugins[i]
 		if plugin.running {
-			err := plugin.execVoidFn(func() { plugin.instance.Stop() })
-			plugin.running = false
-			if err != nil {
-				fmt.Printf("%T Stop failed: %s\n", plugin.instance, err)
+			plugin2, ok := plugin.instance.(spi.IPMAASPlugin2)
+
+			if ok {
+				stopPlugin2(plugin, plugin2)
+			} else {
+				stopPlugin(plugin)
 			}
 		}
 		stopPluginRunner(plugin)
 	}
+}
+
+func stopPlugin(plugin *pluginWithConfig) {
+	err := plugin.execVoidFn(func() { plugin.instance.Stop() })
+	plugin.running = false
+	if err != nil {
+		fmt.Printf("%T Stop failed: %s\n", plugin.instance, err)
+	}
+}
+
+func stopPlugin2(plugin *pluginWithConfig, instance spi.IPMAASPlugin2) {
+	var callbackChannel chan func() = nil
+	err := plugin.execVoidFn(func() { callbackChannel = instance.StopAsync() })
+
+	if err != nil {
+		fmt.Printf("%T Stop failed: %s\n", plugin.instance, err)
+		plugin.running = false
+		return
+	}
+
+	doCallbacks := true
+
+	for callback := range callbackChannel {
+		if doCallbacks {
+			err = plugin.execVoidFn(callback)
+
+			if err != nil {
+				fmt.Printf("%T Stop callback failed: %s\n", plugin.instance, err)
+				doCallbacks = false
+			}
+		}
+	}
+
+	plugin.running = false
 }
 
 func (pmaas *PMAAS) startPluginRunner(plugin *pluginWithConfig) {
