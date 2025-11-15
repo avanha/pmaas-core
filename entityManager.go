@@ -12,7 +12,7 @@ import (
 type addEntityRequest struct {
 	id                string
 	entityType        reflect.Type
-	invocationHandler spi.EntityInvocationHandler
+	invocationHandler spi.EntityInvocationHandlerFunc
 	responseCh        chan error
 }
 
@@ -34,12 +34,12 @@ type removeEntityRequest struct {
 type EntityRecord interface {
 	GetId() string
 	GetEntityType() reflect.Type
-	GetInvocationHandler() spi.EntityInvocationHandler
+	GetInvocationHandler() spi.EntityInvocationHandlerFunc
 }
 type entityRecord struct {
 	id                string
 	entityType        reflect.Type
-	invocationHandler spi.EntityInvocationHandler
+	invocationHandler spi.EntityInvocationHandlerFunc
 }
 
 func (e entityRecord) GetId() string {
@@ -50,7 +50,7 @@ func (e entityRecord) GetEntityType() reflect.Type {
 	return e.entityType
 }
 
-func (e entityRecord) GetInvocationHandler() spi.EntityInvocationHandler {
+func (e entityRecord) GetInvocationHandler() spi.EntityInvocationHandlerFunc {
 	return e.invocationHandler
 }
 
@@ -204,7 +204,7 @@ func (em *EntityManager) handleRemoveEntityRequest(request removeEntityRequest) 
 func (em *EntityManager) AddEntity(
 	id string,
 	entityType reflect.Type,
-	invocationHandler spi.EntityInvocationHandler) error {
+	invocationHandler spi.EntityInvocationHandlerFunc) error {
 	responseCh := make(chan error)
 	request := addEntityRequest{
 		id:                id,

@@ -80,6 +80,7 @@ func (pwc *pluginWithConfig) execErrorFn(target func() error) error {
 	err := pwc.execInternal(f)
 
 	if err != nil {
+		close(errCh)
 		return err
 	}
 
@@ -98,6 +99,7 @@ func (pwc *pluginWithConfig) execVoidFn(target func()) error {
 	err := pwc.execInternal(f)
 
 	if err != nil {
+		close(doneCh)
 		return err
 	}
 
@@ -278,8 +280,8 @@ func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS, prefix string) {
 func (ca *containerAdapter) RegisterEntity(
 	uniqueData string, entityType reflect.Type,
 	name string,
-	invocationHandler spi.EntityInvocationHandler) (string, error) {
-	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, invocationHandler)
+	invocationHandlerFn spi.EntityInvocationHandlerFunc) (string, error) {
+	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, invocationHandlerFn)
 }
 
 func (ca *containerAdapter) DeregisterEntity(id string) error {
@@ -302,6 +304,10 @@ func (ca *containerAdapter) ExecOnPluginGoRoutine(f func()) error {
 
 func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
 	return ca.target.execInternal(f)
+}
+
+func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType reflect.Type) error {
+	return ca.pmaas.assertEntityType(pmaasEntityId, entityType)
 }
 
 func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity any)) error {
@@ -796,10 +802,10 @@ func (pmaas *PMAAS) registerEntity(
 	uniqueData string,
 	entityType reflect.Type,
 	name string,
-	invocationHandler spi.EntityInvocationHandler) (string, error) {
+	invocationHandlerFn spi.EntityInvocationHandlerFunc) (string, error) {
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.pluginType.PkgPath(), sourcePlugin.pluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
-	err := pmaas.entityManager.AddEntity(id, entityType, invocationHandler)
+	err := pmaas.entityManager.AddEntity(id, entityType, invocationHandlerFn)
 
 	if err != nil {
 		return "", err
@@ -833,6 +839,22 @@ func (pmaas *PMAAS) registerEventReceiver(
 func (pmaas *PMAAS) deregisterEventReceiver(
 	_ *pluginWithConfig, handle int) error {
 	return pmaas.eventManager.RemoveReceiver(handle)
+}
+
+func (pmaas *PMAAS) assertEntityType(entityId string, entityType reflect.Type) error {
+	entityRegistration, err := pmaas.entityManager.GetEntity(entityId)
+
+	if err != nil {
+		return fmt.Errorf("assertEntityType failed, unable to get entity %s: %v", entityId, err)
+	}
+
+	actualEntityType := entityRegistration.GetEntityType()
+	if !actualEntityType.AssignableTo(entityType) {
+		return fmt.Errorf("assertEntityType failed, entity %s is a %s not a %s",
+			entityId, actualEntityType, entityType)
+	}
+
+	return nil
 }
 
 func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) error {
