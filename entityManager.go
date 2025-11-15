@@ -68,6 +68,7 @@ func NewEntityManager() *EntityManager {
 	entityManager := &EntityManager{
 		canSendCh:      make(chan bool),
 		addEntityCh:    make(chan addEntityRequest),
+		getEntityCh:    make(chan getEntityRequest),
 		removeEntityCh: make(chan removeEntityRequest),
 		entities:       make(map[string]entityRecord),
 	}
@@ -131,11 +132,15 @@ LOOP1:
 		}
 	}
 LOOP2:
-	// Now that we've received the done signal process the remaining requests that might already be in the channels
+	// Now that we've received the done signal, process the remaining requests that might already be in the channels
 	for {
 		select {
 		case request := <-em.addEntityCh:
 			request.responseCh <- em.handleAddEntityRequest(request)
+			close(request.responseCh)
+			break
+		case request := <-em.getEntityCh:
+			request.responseCh <- em.handleGetEntityRequest(request)
 			close(request.responseCh)
 			break
 		case request := <-em.removeEntityCh:
@@ -150,6 +155,7 @@ LOOP2:
 
 	// All requests have been processed, close the channels
 	close(em.addEntityCh)
+	close(em.getEntityCh)
 	close(em.removeEntityCh)
 
 	fmt.Printf("EntityManager.Run stop\n")
