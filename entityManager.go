@@ -5,12 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+
+	"pmaas.io/spi"
 )
 
 type addEntityRequest struct {
+	id                string
+	entityType        reflect.Type
+	invocationHandler spi.EntityInvocationHandler
+	responseCh        chan error
+}
+
+type getEntityRequest struct {
 	id         string
-	entityType reflect.Type
-	responseCh chan error
+	responseCh chan getEntityResponse
+}
+
+type getEntityResponse struct {
+	entityRecord EntityRecord
+	err          error
 }
 
 type removeEntityRequest struct {
@@ -18,14 +31,33 @@ type removeEntityRequest struct {
 	responseCh     chan error
 }
 
+type EntityRecord interface {
+	GetId() string
+	GetEntityType() reflect.Type
+	GetInvocationHandler() spi.EntityInvocationHandler
+}
 type entityRecord struct {
-	id         string
-	entityType reflect.Type
+	id                string
+	entityType        reflect.Type
+	invocationHandler spi.EntityInvocationHandler
+}
+
+func (e entityRecord) GetId() string {
+	return e.id
+}
+
+func (e entityRecord) GetEntityType() reflect.Type {
+	return e.entityType
+}
+
+func (e entityRecord) GetInvocationHandler() spi.EntityInvocationHandler {
+	return e.invocationHandler
 }
 
 type EntityManager struct {
 	canSendCh      chan bool
 	addEntityCh    chan addEntityRequest
+	getEntityCh    chan getEntityRequest
 	removeEntityCh chan removeEntityRequest
 	runCancelFn    context.CancelFunc
 	runDoneCh      chan error
@@ -83,6 +115,10 @@ LOOP1:
 			request.responseCh <- em.handleAddEntityRequest(request)
 			close(request.responseCh)
 			break
+		case request := <-em.getEntityCh:
+			request.responseCh <- em.handleGetEntityRequest(request)
+			close(request.responseCh)
+			break
 		case request := <-em.removeEntityCh:
 			request.responseCh <- em.handleRemoveEntityRequest(request)
 			close(request.responseCh)
@@ -127,13 +163,30 @@ func (em *EntityManager) handleAddEntityRequest(request addEntityRequest) error 
 	}
 
 	record := entityRecord{
-		id:         request.id,
-		entityType: request.entityType,
+		id:                request.id,
+		entityType:        request.entityType,
+		invocationHandler: request.invocationHandler,
 	}
 
 	em.entities[request.id] = record
 
 	return nil
+}
+
+func (em *EntityManager) handleGetEntityRequest(request getEntityRequest) getEntityResponse {
+	entity, ok := em.entities[request.id]
+
+	if !ok {
+		return getEntityResponse{
+			entityRecord: nil,
+			err:          fmt.Errorf("no entity with id \"%s\" is registered", request.id),
+		}
+	}
+
+	return getEntityResponse{
+		entityRecord: entity,
+		err:          nil,
+	}
 }
 
 func (em *EntityManager) handleRemoveEntityRequest(request removeEntityRequest) error {
@@ -148,9 +201,16 @@ func (em *EntityManager) handleRemoveEntityRequest(request removeEntityRequest) 
 	return nil
 }
 
-func (em *EntityManager) AddEntity(id string, entityType reflect.Type) error {
+func (em *EntityManager) AddEntity(
+	id string,
+	entityType reflect.Type,
+	invocationHandler spi.EntityInvocationHandler) error {
 	responseCh := make(chan error)
-	request := addEntityRequest{id: id, entityType: entityType, responseCh: responseCh}
+	request := addEntityRequest{
+		id:                id,
+		entityType:        entityType,
+		invocationHandler: invocationHandler,
+		responseCh:        responseCh}
 
 	select {
 	case <-em.canSendCh:
@@ -163,6 +223,23 @@ func (em *EntityManager) AddEntity(id string, entityType reflect.Type) error {
 	err := <-responseCh
 
 	return err
+}
+
+func (em *EntityManager) GetEntity(id string) (EntityRecord, error) {
+	responseCh := make(chan getEntityResponse)
+	request := getEntityRequest{id: id, responseCh: responseCh}
+
+	select {
+	case <-em.canSendCh:
+		close(responseCh)
+		return nil, errors.New("unable to get, EntityManager is no longer accepting requests")
+	case em.getEntityCh <- request:
+		break
+	}
+
+	response := <-responseCh
+
+	return response.entityRecord, response.err
 }
 
 func (em *EntityManager) RemoveEntity(registrationId string) error {

@@ -275,8 +275,11 @@ func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS, prefix string) {
 	}
 }
 
-func (ca *containerAdapter) RegisterEntity(uniqueData string, entityType reflect.Type, name string) (string, error) {
-	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name)
+func (ca *containerAdapter) RegisterEntity(
+	uniqueData string, entityType reflect.Type,
+	name string,
+	invocationHandler spi.EntityInvocationHandler) (string, error) {
+	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, invocationHandler)
 }
 
 func (ca *containerAdapter) DeregisterEntity(id string) error {
@@ -299,6 +302,10 @@ func (ca *containerAdapter) ExecOnPluginGoRoutine(f func()) error {
 
 func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
 	return ca.target.execInternal(f)
+}
+
+func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity any)) error {
+	return ca.pmaas.invokeOnEntity(entityId, function)
 }
 
 type PMAAS struct {
@@ -788,10 +795,11 @@ func (pmaas *PMAAS) registerEntity(
 	sourcePlugin *pluginWithConfig,
 	uniqueData string,
 	entityType reflect.Type,
-	name string) (string, error) {
+	name string,
+	invocationHandler spi.EntityInvocationHandler) (string, error) {
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.pluginType.PkgPath(), sourcePlugin.pluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
-	err := pmaas.entityManager.AddEntity(id, entityType)
+	err := pmaas.entityManager.AddEntity(id, entityType, invocationHandler)
 
 	if err != nil {
 		return "", err
@@ -825,6 +833,30 @@ func (pmaas *PMAAS) registerEventReceiver(
 func (pmaas *PMAAS) deregisterEventReceiver(
 	_ *pluginWithConfig, handle int) error {
 	return pmaas.eventManager.RemoveReceiver(handle)
+}
+
+func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) error {
+	entityRegistration, err := pmaas.entityManager.GetEntity(entityId)
+
+	if err != nil {
+		return fmt.Errorf("invokeOnEntity failed, unable to get entity %s: %v", entityId, err)
+	}
+
+	invocationHandler := entityRegistration.GetInvocationHandler()
+
+	if invocationHandler == nil {
+		return fmt.Errorf("invokeOnEntity failed, invocation handler for entity %s is nil", entityId)
+	}
+
+	err = invocationHandler(function)
+
+	if err != nil {
+		return fmt.Errorf(
+			"invokeOnEntity %s failed, plugin invocationHandler returned an error: %v",
+			entityId, err)
+	}
+
+	return nil
 }
 
 func genericEntityRenderer(entity any) (string, error) {
