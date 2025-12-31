@@ -356,7 +356,7 @@ func (pmaas *PMAAS) Run() error {
 
 	// Start and initialize each plugin
 	for _, plugin := range pmaas.plugins {
-		// Start the plugin's plugin runner goroutine, and call Init on the plugin
+		// Start the plugin's plugin runner goroutine and call Init on the plugin
 		pmaas.startPluginRunner(plugin)
 
 		// Create a container adapter
@@ -409,7 +409,7 @@ func (pmaas *PMAAS) Run() error {
 			// Wait for the done signal
 			fmt.Printf("pmaas.Run: Running, waiting for done sginal...\n")
 			<-mainCtx.Done()
-			fmt.Printf("pmaas.Run: Done sginal recevied, stopping...\n")
+			fmt.Printf("pmaas.Run: Done signal received, stopping...\n")
 		} else {
 			fmt.Printf("pmaas.Run: HttpServer start failed: %s\n", err)
 		}
