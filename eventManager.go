@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"pmaas.io/spi/events"
 	"reflect"
+
+	"pmaas.io/spi/events"
 )
 
 type broadcastEventRequest struct {
@@ -29,6 +30,13 @@ type removeReceiverRequest struct {
 	resultCh       chan error
 }
 
+type dispatchRequest struct {
+	receiver  events.EventReceiver
+	handle    int
+	plugin    *pluginWithConfig
+	eventInfo *events.EventInfo
+}
+
 type receiverRecord struct {
 	handle    int
 	plugin    *pluginWithConfig
@@ -46,6 +54,7 @@ type EventManager struct {
 	removeReceiverCh   chan removeReceiverRequest
 	addReceiverCounter int
 	receivers          map[int]receiverRecord
+	dispatchEventCh    chan dispatchRequest
 }
 
 func NewEventManager() *EventManager {
@@ -61,10 +70,10 @@ func (em *EventManager) Start() error {
 	doneCh := make(chan error)
 	go em.run(ctx, doneCh)
 	em.runningCh = make(chan bool)
-	//em.broadcastEventCh = chann.New[broadcastEventRequest]()
-	em.broadcastEventCh = make(chan broadcastEventRequest, 100)
+	em.broadcastEventCh = make(chan broadcastEventRequest)
 	em.addReceiverCh = make(chan addReceiverRequest)
 	em.removeReceiverCh = make(chan removeReceiverRequest)
+	em.dispatchEventCh = make(chan dispatchRequest, 100)
 	em.runCancelFn = cancelFn
 	em.runDoneCh = doneCh
 	return nil
@@ -92,17 +101,9 @@ func (em *EventManager) Stop(ctx context.Context) error {
 }
 
 func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error {
-	// When using an unbuffered chanel, we get a deadlock if an event receiver tries to broadcast an event.
-	// This happens because the event manager goroutine is already busy performing the dispatch, so it
-	// can't receive the request.  We could create a buffered channel, but there's no guarantee about
-	// hitting the buffer limit.  We could save broadcast calls to a queue and process the queue at the end
-	// of dispatch.  Or fire off a goroutine to enqueue them. I'm going to use xchann unbounded queue.
-	// Update: The xchan implementation has some sort of race condition that makes it occasionally crash
-	// on startup.  I'm gonna switch back to a regular buffered channel.
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
-	//case em.broadcastEventCh.In() <- broadcastEventRequest{eventSource: sourceType, event: event}:
 	case em.broadcastEventCh <- broadcastEventRequest{eventSource: sourceType, event: event}:
 		break
 	}
@@ -147,6 +148,11 @@ func (em *EventManager) run(ctx context.Context, doneCh chan error) {
 	fmt.Printf("EventManager.run: start\n")
 	fmt.Printf("EventManager.run: Select requests or done signal\n")
 	defer func() { close(doneCh) }()
+
+	// Execution of registered listeners is done in a separate GoRoutine to allow
+	// event receivers to perform register/deregister operations.
+	dispatchDoneCh := make(chan error)
+	go dispatchEvents(em.dispatchEventCh, dispatchDoneCh)
 
 	// Process requests until we receive the done signal
 	for run := true; run; {
@@ -197,6 +203,14 @@ func (em *EventManager) run(ctx context.Context, doneCh chan error) {
 		//fmt.Printf("EventManager.run: Select requests\n")
 	}
 
+	// Signal the dispatcher GoRoutine to stop and wait for it to terminate
+	close(em.dispatchEventCh)
+	dispatchErr := <-dispatchDoneCh
+
+	if dispatchErr != nil {
+		fmt.Printf("EventManager.run: Error from dispatcher: %s\n", dispatchErr)
+	}
+
 	fmt.Printf("EventManager.run: stop\n")
 }
 
@@ -213,13 +227,11 @@ func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 
 	for _, record := range em.receivers {
 		if record.predicate(eventInfo) {
-			err := record.plugin.execErrorFn(func() error { return record.receiver(eventInfo) })
-
-			if err != nil {
-				fmt.Printf(
-					"EventManager: Event receiver %d returned error when processing %v\n",
-					record.handle,
-					*eventInfo)
+			em.dispatchEventCh <- dispatchRequest{
+				eventInfo: eventInfo,
+				receiver:  record.receiver,
+				handle:    record.handle,
+				plugin:    record.plugin,
 			}
 		}
 	}
@@ -251,4 +263,19 @@ func (em *EventManager) handleRemoveReceiver(request *removeReceiverRequest) {
 
 	delete(em.receivers, request.receiverHandle)
 	request.resultCh <- nil
+}
+
+func dispatchEvents(dispatchRequestCh chan dispatchRequest, doneCh chan error) {
+	defer close(doneCh)
+
+	for request := range dispatchRequestCh {
+		err := request.plugin.execErrorFn(func() error { return request.receiver(request.eventInfo) })
+
+		if err != nil {
+			fmt.Printf(
+				"EventManager: Event receiver %d returned error when processing %v\n",
+				request.handle,
+				*request.eventInfo)
+		}
+	}
 }
