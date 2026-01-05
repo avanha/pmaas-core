@@ -306,6 +306,10 @@ func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
 	return ca.target.execInternal(f)
 }
 
+func (ca *containerAdapter) EnqueueOnServerGoRoutine(f []func()) error {
+	return ca.pmaas.enqueueOnServerGoRoutine(f)
+}
+
 func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType reflect.Type) error {
 	return ca.pmaas.assertEntityType(pmaasEntityId, entityType)
 }
@@ -878,6 +882,10 @@ func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) e
 			entityId, err)
 	}
 
+	return nil
+}
+
+func (pmaas *PMAAS) enqueueOnServerGoRoutine(f []func()) error {
 	return nil
 }
 
