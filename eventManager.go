@@ -10,12 +10,13 @@ import (
 )
 
 type broadcastEventRequest struct {
-	eventSource reflect.Type
-	event       any
+	sourcePluginType reflect.Type
+	sourceEntityId   string
+	event            any
 }
 
 func (r broadcastEventRequest) String() string {
-	return fmt.Sprintf("%T from %v %v", r.event, r.eventSource, r.event)
+	return fmt.Sprintf("%T from %v %v %v", r.event, r.sourcePluginType, r.sourceEntityId, r.event)
 }
 
 type addReceiverRequest struct {
@@ -100,11 +101,14 @@ func (em *EventManager) Stop(ctx context.Context) error {
 	}
 }
 
-func (em *EventManager) BroadcastEvent(sourceType reflect.Type, event any) error {
+func (em *EventManager) BroadcastEvent(sourcePluginType reflect.Type, sourceEntityId string, event any) error {
 	select {
 	case <-em.runningCh:
 		return errors.New("unable to broadcast event, EventManager is no longer accepting requests")
-	case em.broadcastEventCh <- broadcastEventRequest{eventSource: sourceType, event: event}:
+	case em.broadcastEventCh <- broadcastEventRequest{
+		sourceEntityId:   sourceEntityId,
+		sourcePluginType: sourcePluginType,
+		event:            event}:
 		break
 	}
 
@@ -221,8 +225,9 @@ func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 	fmt.Printf("EventManager: Broadcasting event, %v\n", request)
 
 	eventInfo := &events.EventInfo{
-		EventSourceType: request.eventSource,
-		Event:           request.event,
+		SourceEntityId:   request.sourceEntityId,
+		SourcePluginType: request.sourcePluginType,
+		Event:            request.event,
 	}
 
 	for _, record := range em.receivers {

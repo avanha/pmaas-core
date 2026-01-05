@@ -235,8 +235,8 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 	ca.target.httpHandlers = append(ca.target.httpHandlers, &registration)
 }
 
-func (ca *containerAdapter) BroadcastEvent(event any) error {
-	return ca.pmaas.broadcastEvent(ca.target, event)
+func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) error {
+	return ca.pmaas.broadcastEvent(ca.target, sourceEntityId, event)
 }
 
 func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rendererFactory spi.EntityRendererFactory) {
@@ -816,7 +816,7 @@ func (pmaas *PMAAS) registerEntity(
 	}
 
 	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}}
-	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, event)
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, "", event)
 
 	if err != nil {
 		fmt.Printf("Unable to broadcast %s: %v", event, err)
@@ -829,8 +829,8 @@ func (pmaas *PMAAS) deregisterEntity(_ *pluginWithConfig, id string) error {
 	return pmaas.entityManager.RemoveEntity(id)
 }
 
-func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, event any) error {
-	return pmaas.eventManager.BroadcastEvent(sourcePlugin.pluginType, event)
+func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, sourceEntityId string, event any) error {
+	return pmaas.eventManager.BroadcastEvent(sourcePlugin.pluginType, sourceEntityId, event)
 }
 
 func (pmaas *PMAAS) registerEventReceiver(
