@@ -63,11 +63,15 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	d.running = false
 	d.rwLock.Unlock()
 
-	// Wait for any in-flight Dispatch calls to finish sending to the channel
-	d.callbackChWriters.Wait()
-	close(d.callbackCh)
+	// Close the callback channel once there are no more active writers.
+	// We're using a new Go Routine so the current one can continue consuming
+	// from the channel until it's empty.
+	go func() {
+		d.callbackChWriters.Wait()
+		close(d.callbackCh)
+	}()
 
-	// Process any already enqueued callbacks
+	// Continue processing callbacks until the channel is drained.
 	for callback := range d.callbackCh {
 		d.executeCallback(callback)
 	}
