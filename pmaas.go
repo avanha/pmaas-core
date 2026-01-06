@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"pmaas.io/core/internal/dispatcher"
 	"pmaas.io/spi"
 	"pmaas.io/spi/events"
 )
@@ -318,11 +319,14 @@ func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity
 	return ca.pmaas.invokeOnEntity(entityId, function)
 }
 
+const PMAAS_SERVER_PMAAS_ENTITY_ID = "PMAAS_SERVER"
+
 type PMAAS struct {
 	config        *Config
 	plugins       []*pluginWithConfig
 	entityManager *EntityManager
 	eventManager  *EventManager
+	dispatcher    *dispatcher.Dispatcher
 	selfType      reflect.Type
 }
 
@@ -332,6 +336,7 @@ func NewPMAAS(config *Config) *PMAAS {
 		plugins:       config.plugins,
 		entityManager: NewEntityManager(),
 		eventManager:  NewEventManager(),
+		dispatcher:    dispatcher.NewDispatcher(),
 	}
 
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
@@ -411,8 +416,8 @@ func (pmaas *PMAAS) Run() error {
 		httpServer, err = pmaas.startHttpServer()
 		if err == nil {
 			// Wait for the done signal
-			fmt.Printf("pmaas.Run: Running, waiting for done sginal...\n")
-			<-mainCtx.Done()
+			fmt.Printf("pmaas.Run: Running, waiting for done signal...\n")
+			pmaas.dispatcher.Run(mainCtx)
 			fmt.Printf("pmaas.Run: Done signal received, stopping...\n")
 		} else {
 			fmt.Printf("pmaas.Run: HttpServer start failed: %s\n", err)
@@ -816,7 +821,7 @@ func (pmaas *PMAAS) registerEntity(
 	}
 
 	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}}
-	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, "", event)
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PMAAS_SERVER_PMAAS_ENTITY_ID, event)
 
 	if err != nil {
 		fmt.Printf("Unable to broadcast %s: %v", event, err)
@@ -885,8 +890,8 @@ func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) e
 	return nil
 }
 
-func (pmaas *PMAAS) enqueueOnServerGoRoutine(f []func()) error {
-	return nil
+func (pmaas *PMAAS) enqueueOnServerGoRoutine(callbacks []func()) error {
+	return pmaas.dispatcher.Dispatch(callbacks)
 }
 
 func genericEntityRenderer(entity any) (string, error) {
