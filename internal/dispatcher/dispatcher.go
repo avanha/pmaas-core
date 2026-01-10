@@ -80,7 +80,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 func (d *Dispatcher) executeCallback(callback func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("panic in callback: %v\n", r)
+			fmt.Printf("Dispatcher: panic in callback: %v\n", r)
 		}
 	}()
 
