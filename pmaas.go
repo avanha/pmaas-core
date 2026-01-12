@@ -355,6 +355,23 @@ func (pmaas *PMAAS) Run() error {
 
 	mainCtx, cancelFn := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancelFn()
+
+	dispatcherCtx, dispatcherCancelFn := context.WithCancel(context.Background())
+
+	errCh := make(chan error)
+
+	go func() {
+		err := pmaas.internalRun(mainCtx)
+		dispatcherCancelFn()
+		errCh <- err
+	}()
+
+	pmaas.dispatcher.Run(dispatcherCtx)
+
+	return <-errCh
+}
+
+func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	defer func() {
 		for i := len(pmaas.plugins) - 1; i >= 0; i-- {
 			stopPluginRunner(pmaas.plugins[i])
@@ -374,7 +391,7 @@ func (pmaas *PMAAS) Run() error {
 			target: plugin}
 
 		// Synchronously execute the plugin's Init function via the plugin's plugin runner
-		// goroutine, passing it the container adapter.
+		// goroutine, passing the container adapter.
 		err := plugin.execVoidFn(func() { plugin.instance.Init(ca) })
 
 		if err != nil {
@@ -417,8 +434,7 @@ func (pmaas *PMAAS) Run() error {
 		if err == nil {
 			// Wait for the done signal
 			fmt.Printf("pmaas.Run: Running, waiting for done signal...\n")
-			pmaas.dispatcher.Run(mainCtx)
-			fmt.Printf("pmaas.Run: Done signal received, stopping...\n")
+			<-ctx.Done()
 		} else {
 			fmt.Printf("pmaas.Run: HttpServer start failed: %s\n", err)
 		}
@@ -437,7 +453,7 @@ func (pmaas *PMAAS) Run() error {
 
 	fmt.Printf("pmaas.Run: End\n")
 
-	return nil
+	return err
 }
 
 func (pmaas *PMAAS) startHttpServer() (*HttpServer, error) {
