@@ -77,12 +77,13 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	// Continue processing callbacks until the channel is drained.
 	fmt.Println("PMAAS.Dispatcher: Dispatching remaining callbacks...")
 	dispatchCount := 0
+
 	for callback := range d.callbackCh {
 		d.executeCallback(callback)
 		dispatchCount++
 	}
 
-	fmt.Printf("PMAAS.Dispatcher: Stopped (Dispatched %v remaining callback(s))\n", dispatchCount)
+	fmt.Printf("PMAAS.Dispatcher: Stopped, dispatched %d remaining callback(s)\n", dispatchCount)
 }
 
 func (d *Dispatcher) executeCallback(callback func()) {
