@@ -82,7 +82,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		dispatchCount++
 	}
 
-	fmt.Printf("PMAAS.Dispatcher: Stopped (Dispatched %v remaining callback(s)\n", dispatchCount)
+	fmt.Printf("PMAAS.Dispatcher: Stopped (Dispatched %v remaining callback(s))\n", dispatchCount)
 }
 
 func (d *Dispatcher) executeCallback(callback func()) {
