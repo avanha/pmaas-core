@@ -512,6 +512,7 @@ func stopEventManager(eventManager *EventManager) {
 func stopPlugins(plugins []*pluginWithConfig) {
 	for i := len(plugins) - 1; i >= 0; i-- {
 		plugin := plugins[i]
+		startTime := time.Now()
 		if plugin.running {
 			plugin2, ok := plugin.instance.(spi.IPMAASPlugin2)
 
@@ -522,6 +523,8 @@ func stopPlugins(plugins []*pluginWithConfig) {
 			}
 		}
 		stopPluginRunner(plugin)
+		stopDuration := time.Now().Sub(startTime)
+		fmt.Printf("PMAAS Stopped %T in %v\n", plugin.instance, stopDuration)
 	}
 }
 
@@ -847,7 +850,26 @@ func (pmaas *PMAAS) registerEntity(
 }
 
 func (pmaas *PMAAS) deregisterEntity(_ *pluginWithConfig, id string) error {
-	return pmaas.entityManager.RemoveEntity(id)
+	entityRecord, err := pmaas.entityManager.GetEntity(id)
+
+	if err != nil {
+		return fmt.Errorf("deregisterEntity failed, unable to get entity %s: %v", id, err)
+	}
+
+	err = pmaas.entityManager.RemoveEntity(id)
+
+	if err != nil {
+		return fmt.Errorf("deregisterEntity failed, unable to remove entity %s: %v", id, err)
+	}
+
+	event := events.EntityDeregisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityRecord.GetEntityType()}}
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PMAAS_SERVER_PMAAS_ENTITY_ID, event)
+
+	if err != nil {
+		fmt.Printf("Unable to broadcast %s: %v", event, err)
+	}
+
+	return nil
 }
 
 func (pmaas *PMAAS) broadcastEvent(sourcePlugin *pluginWithConfig, sourceEntityId string, event any) error {
