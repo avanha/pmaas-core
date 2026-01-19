@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"reflect"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -21,17 +20,10 @@ import (
 	"pmaas.io/core/internal/dispatcher"
 	"pmaas.io/core/internal/entitymanager"
 	"pmaas.io/core/internal/eventmanager"
-	pmaashttp "pmaas.io/core/internal/http"
 	"pmaas.io/core/internal/plugins"
 	"pmaas.io/spi"
 	"pmaas.io/spi/events"
 )
-
-type Config struct {
-	ContentPathRoot string
-	HttpPort        int
-	plugins         []*plugins.PluginWithConfig
-}
 
 type dirWithLogger struct {
 	delegate http.FileSystem
@@ -47,163 +39,21 @@ func (dwl dirWithLogger) Open(name string) (http.File, error) {
 	return file, err
 }
 
-func NewConfig() *Config {
-	return &Config{
-		ContentPathRoot: "/var/pmaas/content",
-		HttpPort:        8090,
-		plugins:         nil,
-	}
-}
-
-func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config config.PluginConfig) {
-	var wrapper = &plugins.PluginWithConfig{
-		Config:               &config,
-		Instance:             plugin,
-		HttpHandlers:         make([]pmaashttp.HttpHandlerRegistration, 0),
-		EntityRenderers:      make([]pmaashttp.EntityRendererRegistration, 0),
-		PluginType:           getPluginType(plugin),
-		ExecRequestCh:        nil,
-		ExecRequestChOpen:    false,
-		ExecRequestChClosed:  nil,
-		ExecRequestChSendOps: sync.WaitGroup{},
-		RunnerDoneCh:         nil,
-		Running:              false,
-	}
-
-	if c.plugins == nil {
-		c.plugins = []*plugins.PluginWithConfig{wrapper}
-	} else {
-		c.plugins = append(c.plugins, wrapper)
-	}
-}
-
-func getPluginType(plugin spi.IPMAASPlugin) reflect.Type {
-	pluginType := reflect.TypeOf(plugin)
-
-	if pluginType.Kind() == reflect.Ptr {
-		pluginType = reflect.ValueOf(plugin).Elem().Type()
-	}
-
-	return pluginType
-}
-
-// containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the
-// PMAAS server along with the plugin instance and its config.  This allows us to track the
-// plugin calling into the PMAAS server.
-type containerAdapter struct {
-	pmaas  *PMAAS
-	target *plugins.PluginWithConfig
-}
-
-// Force implementation of IPMAASContainer
-var _ spi.IPMAASContainer = (*containerAdapter)(nil)
-
-func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
-	registration := pmaashttp.HttpHandlerRegistration{
-		Pattern:     path,
-		HandlerFunc: handlerFunc,
-	}
-	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
-}
-
-func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) error {
-	return ca.pmaas.broadcastEvent(ca.target, sourceEntityId, event)
-}
-
-func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rendererFactory spi.EntityRendererFactory) {
-	registration := pmaashttp.EntityRendererRegistration{
-		EntityType:      entityType,
-		RendererFactory: rendererFactory,
-	}
-	ca.target.EntityRenderers = append(ca.target.EntityRenderers, registration)
-}
-
-func (ca *containerAdapter) RenderList(w http.ResponseWriter, r *http.Request, options spi.RenderListOptions, items []interface{}) {
-	ca.pmaas.renderList(ca.target, w, r, options, items)
-}
-
-func (ca *containerAdapter) GetTemplate(templateInfo *spi.TemplateInfo) (spi.CompiledTemplate, error) {
-	return ca.pmaas.getTemplate(ca.target, templateInfo)
-}
-
-func (ca *containerAdapter) GetEntityRenderer(entityType reflect.Type) (spi.EntityRenderer, error) {
-	return ca.pmaas.getEntityRenderer(ca.target, entityType)
-}
-
-func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
-	ca.target.StaticContentDir = staticContentDir
-}
-
-func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS, prefix string) {
-	if prefix == "" {
-		ca.target.ContentFS = contentFS
-	} else {
-		subFS, err := fs.Sub(contentFS, prefix)
-
-		if err != nil {
-			panic(fmt.Sprintf("Can't create SubFS instance: %v", err))
-		}
-
-		ca.target.ContentFS = subFS
-	}
-}
-
-func (ca *containerAdapter) RegisterEntity(
-	uniqueData string, entityType reflect.Type,
-	name string,
-	invocationHandlerFn spi.EntityInvocationHandlerFunc) (string, error) {
-	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, invocationHandlerFn)
-}
-
-func (ca *containerAdapter) DeregisterEntity(id string) error {
-	return ca.pmaas.deregisterEntity(ca.target, id)
-}
-
-func (ca *containerAdapter) RegisterEventReceiver(
-	predicate events.EventPredicate,
-	receiver events.EventReceiver) (int, error) {
-	return ca.pmaas.registerEventReceiver(ca.target, predicate, receiver)
-}
-
-func (ca *containerAdapter) DeregisterEventReceiver(handle int) error {
-	return ca.pmaas.deregisterEventReceiver(ca.target, handle)
-}
-
-func (ca *containerAdapter) ExecOnPluginGoRoutine(f func()) error {
-	return ca.target.ExecVoidFn(f)
-}
-
-func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
-	return ca.target.ExecInternal(f)
-}
-
-func (ca *containerAdapter) EnqueueOnServerGoRoutine(f []func()) error {
-	return ca.pmaas.enqueueOnServerGoRoutine(f)
-}
-
-func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType reflect.Type) error {
-	return ca.pmaas.assertEntityType(pmaasEntityId, entityType)
-}
-
-func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity any)) error {
-	return ca.pmaas.invokeOnEntity(entityId, function)
-}
-
 const PMAAS_SERVER_PMAAS_ENTITY_ID = "PMAAS_SERVER"
 
 type PMAAS struct {
-	config        *Config
-	plugins       []*plugins.PluginWithConfig
+	config        *config.Config
+	plugins       []*plugins.PluginWrapper
 	entityManager *entitymanager.EntityManager
 	eventManager  *eventmanager.EventManager
 	dispatcher    *dispatcher.Dispatcher
 	selfType      reflect.Type
 }
 
-func NewPMAAS(config *Config) *PMAAS {
+func NewPMAAS(config *config.Config) *PMAAS {
 	instance := &PMAAS{
 		config:        config,
-		plugins:       config.plugins,
+		plugins:       createPluginWrappers(config.Plugins()),
 		entityManager: entitymanager.NewEntityManager(),
 		eventManager:  eventmanager.NewEventManager(),
 		dispatcher:    dispatcher.NewDispatcher(),
@@ -211,6 +61,16 @@ func NewPMAAS(config *Config) *PMAAS {
 
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	return instance
+}
+
+func createPluginWrappers(configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
+	wrappers := make([]*plugins.PluginWrapper, len(configuredPlugins))
+
+	for i, plugin := range configuredPlugins {
+		wrappers[i] = plugins.NewPluginWraper(plugin)
+	}
+
+	return wrappers
 }
 
 func hello(w http.ResponseWriter, _ *http.Request) {
@@ -380,7 +240,7 @@ func stopEventManager(eventManager *eventmanager.EventManager) {
 	}
 }
 
-func stopPlugins(plugins []*plugins.PluginWithConfig) {
+func stopPlugins(plugins []*plugins.PluginWrapper) {
 	for i := len(plugins) - 1; i >= 0; i-- {
 		plugin := plugins[i]
 		startTime := time.Now()
@@ -399,7 +259,7 @@ func stopPlugins(plugins []*plugins.PluginWithConfig) {
 	}
 }
 
-func stopPlugin(plugin *plugins.PluginWithConfig) {
+func stopPlugin(plugin *plugins.PluginWrapper) {
 	err := plugin.ExecVoidFn(func() { plugin.Instance.Stop() })
 	plugin.Running = false
 	if err != nil {
@@ -407,7 +267,7 @@ func stopPlugin(plugin *plugins.PluginWithConfig) {
 	}
 }
 
-func stopPlugin2(plugin *plugins.PluginWithConfig, instance spi.IPMAASPlugin2) {
+func stopPlugin2(plugin *plugins.PluginWrapper, instance spi.IPMAASPlugin2) {
 	var callbackChannel chan func() = nil
 	err := plugin.ExecVoidFn(func() { callbackChannel = instance.StopAsync() })
 
@@ -433,7 +293,7 @@ func stopPlugin2(plugin *plugins.PluginWithConfig, instance spi.IPMAASPlugin2) {
 	plugin.Running = false
 }
 
-func (pmaas *PMAAS) startPluginRunner(plugin *plugins.PluginWithConfig) {
+func (pmaas *PMAAS) startPluginRunner(plugin *plugins.PluginWrapper) {
 	// Initialize the runner control members
 	plugin.ExecRequestCh = make(chan func())
 	plugin.ExecRequestChOpen = true
@@ -457,7 +317,7 @@ func (pmaas *PMAAS) startPluginRunner(plugin *plugins.PluginWithConfig) {
 
 }
 
-func stopPluginRunner(plugin *plugins.PluginWithConfig) {
+func stopPluginRunner(plugin *plugins.PluginWrapper) {
 	if plugin.ExecRequestChOpen {
 		// Mark that execRequestCh is no longer open, so we don't try to close it twice
 		plugin.ExecRequestChOpen = false
@@ -483,7 +343,7 @@ func stopPluginRunner(plugin *plugins.PluginWithConfig) {
 	}
 }
 
-func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *plugins.PluginWithConfig, serveMux *http.ServeMux) {
+func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *plugins.PluginWrapper, serveMux *http.ServeMux) {
 	pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
 	pluginContentFS, staticContentDir := pmaas.getContentFS(plugin)
 
@@ -521,7 +381,7 @@ func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *plugins.PluginWithCo
 	serveMux.HandleFunc(pluginPath+"hello", hello)
 }
 
-func (pmaas *PMAAS) renderList(_ *plugins.PluginWithConfig, w http.ResponseWriter, r *http.Request,
+func (pmaas *PMAAS) renderList(_ *plugins.PluginWrapper, w http.ResponseWriter, r *http.Request,
 	options spi.RenderListOptions, items []interface{}) {
 	alt := r.URL.Query()["alt"]
 
@@ -560,7 +420,7 @@ func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, _ *http.Request, items
 }
 
 func (pmaas *PMAAS) getTemplate(
-	sourcePlugin *plugins.PluginWithConfig, templateInfo *spi.TemplateInfo) (compiledTemplate spi.CompiledTemplate, err error) {
+	sourcePlugin *plugins.PluginWrapper, templateInfo *spi.TemplateInfo) (compiledTemplate spi.CompiledTemplate, err error) {
 	var templateEnginePlugin spi.IPMAASTemplateEnginePlugin = nil
 
 	for _, plugin := range pmaas.plugins {
@@ -615,12 +475,12 @@ func (pmaas *PMAAS) getTemplate(
 	return templateEnginePlugin.GetTemplate(&updatedTemplateInfo)
 }
 
-func (pmaas *PMAAS) getPluginPath(plugin *plugins.PluginWithConfig) string {
+func (pmaas *PMAAS) getPluginPath(plugin *plugins.PluginWrapper) string {
 	pluginType := plugin.PluginType
 	return pluginType.PkgPath() + "/" + pluginType.Name()
 }
 
-func (pmaas *PMAAS) getContentFS(plugin *plugins.PluginWithConfig) (fs.FS, string) {
+func (pmaas *PMAAS) getContentFS(plugin *plugins.PluginWrapper) (fs.FS, string) {
 	if plugin.Config.ContentPathOverride != "" {
 		// The plugin config provided a path
 		contentFs := os.DirFS(plugin.Config.ContentPathOverride)
@@ -643,7 +503,7 @@ func (pmaas *PMAAS) getContentFS(plugin *plugins.PluginWithConfig) (fs.FS, strin
 	return plugin.ContentFS, fmt.Sprintf("%T(providedByPlugin)", plugin.ContentFS)
 }
 
-func (pmaas *PMAAS) getEntityRenderer(_ *plugins.PluginWithConfig, entityType reflect.Type) (spi.EntityRenderer, error) {
+func (pmaas *PMAAS) getEntityRenderer(_ *plugins.PluginWrapper, entityType reflect.Type) (spi.EntityRenderer, error) {
 	var rendererFactory spi.EntityRendererFactory
 
 	for _, plugin := range pmaas.plugins {
@@ -696,7 +556,7 @@ func (pmaas *PMAAS) getEntityRenderer(_ *plugins.PluginWithConfig, entityType re
 }
 
 func (pmaas *PMAAS) registerEntity(
-	sourcePlugin *plugins.PluginWithConfig,
+	sourcePlugin *plugins.PluginWrapper,
 	uniqueData string,
 	entityType reflect.Type,
 	name string,
@@ -719,7 +579,7 @@ func (pmaas *PMAAS) registerEntity(
 	return id, nil
 }
 
-func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWithConfig, id string) error {
+func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWrapper, id string) error {
 	entityRecord, err := pmaas.entityManager.GetEntity(id)
 
 	if err != nil {
@@ -742,19 +602,19 @@ func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWithConfig, id string) err
 	return nil
 }
 
-func (pmaas *PMAAS) broadcastEvent(sourcePlugin *plugins.PluginWithConfig, sourceEntityId string, event any) error {
+func (pmaas *PMAAS) broadcastEvent(sourcePlugin *plugins.PluginWrapper, sourceEntityId string, event any) error {
 	return pmaas.eventManager.BroadcastEvent(sourcePlugin.PluginType, sourceEntityId, event)
 }
 
 func (pmaas *PMAAS) registerEventReceiver(
-	sourcePlugin *plugins.PluginWithConfig,
+	sourcePlugin *plugins.PluginWrapper,
 	predicate events.EventPredicate,
 	receiver events.EventReceiver) (int, error) {
 	return pmaas.eventManager.AddReceiver(sourcePlugin, predicate, receiver)
 }
 
 func (pmaas *PMAAS) deregisterEventReceiver(
-	_ *plugins.PluginWithConfig, handle int) error {
+	_ *plugins.PluginWrapper, handle int) error {
 	return pmaas.eventManager.RemoveReceiver(handle)
 }
 

@@ -21,7 +21,7 @@ func (r broadcastEventRequest) String() string {
 }
 
 type addReceiverRequest struct {
-	plugin    *plugins.PluginWithConfig
+	plugin    *plugins.PluginWrapper
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 	resultCh  chan int
@@ -35,13 +35,13 @@ type removeReceiverRequest struct {
 type dispatchRequest struct {
 	receiver  events.EventReceiver
 	handle    int
-	plugin    *plugins.PluginWithConfig
+	plugin    *plugins.PluginWrapper
 	eventInfo *events.EventInfo
 }
 
 type receiverRecord struct {
 	handle    int
-	plugin    *plugins.PluginWithConfig
+	plugin    *plugins.PluginWrapper
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 }
@@ -117,7 +117,7 @@ func (em *EventManager) BroadcastEvent(sourcePluginType reflect.Type, sourceEnti
 }
 
 func (em *EventManager) AddReceiver(
-	plugin *plugins.PluginWithConfig,
+	plugin *plugins.PluginWrapper,
 	predicate events.EventPredicate,
 	receiver events.EventReceiver) (int, error) {
 	resultCh := make(chan int)

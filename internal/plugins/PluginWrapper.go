@@ -11,7 +11,7 @@ import (
 	"pmaas.io/spi"
 )
 
-type PluginWithConfig struct {
+type PluginWrapper struct {
 	Config           *config.PluginConfig
 	Instance         spi.IPMAASPlugin
 	HttpHandlers     []http.HttpHandlerRegistration
@@ -43,9 +43,25 @@ type PluginWithConfig struct {
 	RunnerDoneCh chan error
 }
 
+func NewPluginWraper(pluginWithConfig config.PluginWithConfig) *PluginWrapper {
+	return &PluginWrapper{
+		Config:               &pluginWithConfig.Config,
+		Instance:             pluginWithConfig.Instance,
+		PluginType:           pluginWithConfig.PluginType,
+		HttpHandlers:         make([]http.HttpHandlerRegistration, 0),
+		EntityRenderers:      make([]http.EntityRendererRegistration, 0),
+		ExecRequestCh:        nil,
+		ExecRequestChOpen:    false,
+		ExecRequestChClosed:  nil,
+		ExecRequestChSendOps: sync.WaitGroup{},
+		RunnerDoneCh:         nil,
+		Running:              false,
+	}
+}
+
 // ExecErrorFn Executes a function that returns an error using the plugin's plugin runner goroutine.  Returns
 // after execution completes, or early, if there was a problem enqueueing.
-func (pwc *PluginWithConfig) ExecErrorFn(target func() error) error {
+func (pwc *PluginWrapper) ExecErrorFn(target func() error) error {
 	errCh := make(chan error)
 	f := func() {
 		defer func() { close(errCh) }()
@@ -64,7 +80,7 @@ func (pwc *PluginWithConfig) ExecErrorFn(target func() error) error {
 
 // ExecVoidFn Executes a function that doesn't return anything on the plugin's plugin runner goroutine.
 // Returns only after execution completes, or early, if there was a problem enqueueing.
-func (pwc *PluginWithConfig) ExecVoidFn(target func()) error {
+func (pwc *PluginWrapper) ExecVoidFn(target func()) error {
 	doneCh := make(chan bool)
 	f := func() {
 		defer func() { close(doneCh) }()
@@ -85,7 +101,7 @@ func (pwc *PluginWithConfig) ExecVoidFn(target func()) error {
 // ExecInternal Enqueues the specified function to execute on the plugin's runner thread.  Returns an error
 // if the function cannot be enqueued, for example, when the runner has stopped accepting requests
 // as part of the shutdown process.
-func (pwc *PluginWithConfig) ExecInternal(target func()) error {
+func (pwc *PluginWrapper) ExecInternal(target func()) error {
 	var err error = nil
 
 	// The solution here is inspired by "multiple senders one receiver" at
