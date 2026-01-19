@@ -1,4 +1,4 @@
-package core
+package eventmanager
 
 import (
 	"context"
@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"pmaas.io/core/internal/plugins"
 	"pmaas.io/spi/events"
 )
 
@@ -20,7 +21,7 @@ func (r broadcastEventRequest) String() string {
 }
 
 type addReceiverRequest struct {
-	plugin    *pluginWithConfig
+	plugin    *plugins.PluginWithConfig
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 	resultCh  chan int
@@ -34,13 +35,13 @@ type removeReceiverRequest struct {
 type dispatchRequest struct {
 	receiver  events.EventReceiver
 	handle    int
-	plugin    *pluginWithConfig
+	plugin    *plugins.PluginWithConfig
 	eventInfo *events.EventInfo
 }
 
 type receiverRecord struct {
 	handle    int
-	plugin    *pluginWithConfig
+	plugin    *plugins.PluginWithConfig
 	predicate events.EventPredicate
 	receiver  events.EventReceiver
 }
@@ -116,7 +117,7 @@ func (em *EventManager) BroadcastEvent(sourcePluginType reflect.Type, sourceEnti
 }
 
 func (em *EventManager) AddReceiver(
-	plugin *pluginWithConfig,
+	plugin *plugins.PluginWithConfig,
 	predicate events.EventPredicate,
 	receiver events.EventReceiver) (int, error) {
 	resultCh := make(chan int)
@@ -274,7 +275,7 @@ func dispatchEvents(dispatchRequestCh chan dispatchRequest, doneCh chan error) {
 	defer close(doneCh)
 
 	for request := range dispatchRequestCh {
-		err := request.plugin.execErrorFn(func() error { return request.receiver(request.eventInfo) })
+		err := request.plugin.ExecErrorFn(func() error { return request.receiver(request.eventInfo) })
 
 		if err != nil {
 			fmt.Printf(
