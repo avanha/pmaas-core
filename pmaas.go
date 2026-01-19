@@ -59,7 +59,7 @@ func (c *Config) AddPlugin(plugin spi.IPMAASPlugin, config config.PluginConfig) 
 	var wrapper = &plugins.PluginWithConfig{
 		Config:               &config,
 		Instance:             plugin,
-		HttpHandlers:         make([]*pmaashttp.HttpHandlerRegistration, 0),
+		HttpHandlers:         make([]pmaashttp.HttpHandlerRegistration, 0),
 		EntityRenderers:      make([]pmaashttp.EntityRendererRegistration, 0),
 		PluginType:           getPluginType(plugin),
 		ExecRequestCh:        nil,
@@ -103,7 +103,7 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 		Pattern:     path,
 		HandlerFunc: handlerFunc,
 	}
-	ca.target.HttpHandlers = append(ca.target.HttpHandlers, &registration)
+	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
 }
 
 func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) error {
@@ -333,7 +333,7 @@ func (pmaas *PMAAS) startHttpServer() (*HttpServer, error) {
 	//serveMux.HandleFunc("/plugin", listPlugins)
 
 	for _, plugin := range pmaas.plugins {
-		fmt.Printf("Plugin %T config: %v\n", plugin.Instance, plugin.Config)
+		fmt.Printf("Plugin %T config: %+v\n", plugin.Instance, plugin.Config)
 		if plugin.StaticContentDir != "" {
 			pmaas.configurePluginStaticContentDir(plugin, serveMux)
 		}
@@ -343,7 +343,7 @@ func (pmaas *PMAAS) startHttpServer() (*HttpServer, error) {
 		}
 	}
 
-	fmt.Printf("serverMux: %v\n", serveMux)
+	//fmt.Printf("ServeMux: %v\n", serveMux)
 
 	httpServer := NewHttpServer(serveMux, pmaas.config.HttpPort)
 

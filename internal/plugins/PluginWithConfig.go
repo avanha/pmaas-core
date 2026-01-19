@@ -14,7 +14,7 @@ import (
 type PluginWithConfig struct {
 	Config           *config.PluginConfig
 	Instance         spi.IPMAASPlugin
-	HttpHandlers     []*http.HttpHandlerRegistration
+	HttpHandlers     []http.HttpHandlerRegistration
 	EntityRenderers  []http.EntityRendererRegistration
 	StaticContentDir string
 	ContentFS        fs.FS
