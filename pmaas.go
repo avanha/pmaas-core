@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"pmaas.io/core/internal/dispatcher"
+	"pmaas.io/core/internal/entitymanager"
 	"pmaas.io/spi"
 	"pmaas.io/spi/events"
 )
@@ -324,7 +325,7 @@ const PMAAS_SERVER_PMAAS_ENTITY_ID = "PMAAS_SERVER"
 type PMAAS struct {
 	config        *Config
 	plugins       []*pluginWithConfig
-	entityManager *EntityManager
+	entityManager *entitymanager.EntityManager
 	eventManager  *EventManager
 	dispatcher    *dispatcher.Dispatcher
 	selfType      reflect.Type
@@ -334,7 +335,7 @@ func NewPMAAS(config *Config) *PMAAS {
 	instance := &PMAAS{
 		config:        config,
 		plugins:       config.plugins,
-		entityManager: NewEntityManager(),
+		entityManager: entitymanager.NewEntityManager(),
 		eventManager:  NewEventManager(),
 		dispatcher:    dispatcher.NewDispatcher(),
 	}
@@ -489,7 +490,7 @@ func stopHttpServer(httpServer *HttpServer) {
 	}
 }
 
-func stopEntityManager(entityManager *EntityManager) {
+func stopEntityManager(entityManager *entitymanager.EntityManager) {
 	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancelFn()
 	err := entityManager.Stop(ctx)
