@@ -24,7 +24,7 @@ import (
 	"pmaas.io/spi/events"
 )
 
-const PMAAS_SERVER_PMAAS_ENTITY_ID = "PMAAS_SERVER"
+const PmaasServerPmaasEntityId = "PMAAS_SERVER"
 
 type PMAAS struct {
 	config             *config.Config
@@ -465,7 +465,7 @@ func (pmaas *PMAAS) registerEntity(
 	}
 
 	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}}
-	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PMAAS_SERVER_PMAAS_ENTITY_ID, event)
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
 		fmt.Printf("Unable to broadcast %s: %v", event, err)
@@ -488,7 +488,7 @@ func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWrapper, id string) error 
 	}
 
 	event := events.EntityDeregisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityRecord.GetEntityType()}}
-	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PMAAS_SERVER_PMAAS_ENTITY_ID, event)
+	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
 		fmt.Printf("Unable to broadcast %s: %v", event, err)
