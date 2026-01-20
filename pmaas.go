@@ -6,10 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"net/http"
-	"os"
 	"os/signal"
 	"reflect"
 	"strings"
@@ -20,64 +17,46 @@ import (
 	"pmaas.io/core/internal/dispatcher"
 	"pmaas.io/core/internal/entitymanager"
 	"pmaas.io/core/internal/eventmanager"
+	pmaashttp "pmaas.io/core/internal/http"
 	"pmaas.io/core/internal/plugins"
+	"pmaas.io/core/internal/pmaasserver"
 	"pmaas.io/spi"
 	"pmaas.io/spi/events"
 )
 
-type dirWithLogger struct {
-	delegate http.FileSystem
-}
-
-func (dwl dirWithLogger) Open(name string) (http.File, error) {
-	file, err := dwl.delegate.Open(name)
-
-	if err != nil {
-		fmt.Printf("Error opening %s: %v\n", name, err)
-	}
-
-	return file, err
-}
-
 const PMAAS_SERVER_PMAAS_ENTITY_ID = "PMAAS_SERVER"
 
 type PMAAS struct {
-	config        *config.Config
-	plugins       []*plugins.PluginWrapper
-	entityManager *entitymanager.EntityManager
-	eventManager  *eventmanager.EventManager
-	dispatcher    *dispatcher.Dispatcher
-	selfType      reflect.Type
+	config             *config.Config
+	plugins            []*plugins.PluginWrapper
+	entityManager      *entitymanager.EntityManager
+	eventManager       *eventmanager.EventManager
+	dispatcher         *dispatcher.Dispatcher
+	selfType           reflect.Type
+	pmaasServerAdapter pmaasserver.PmaasServer
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
 	instance := &PMAAS{
 		config:        config,
-		plugins:       createPluginWrappers(config.Plugins()),
 		entityManager: entitymanager.NewEntityManager(),
 		eventManager:  eventmanager.NewEventManager(),
 		dispatcher:    dispatcher.NewDispatcher(),
 	}
-
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
+	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
+	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, config.Plugins())
 	return instance
 }
 
-func createPluginWrappers(configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
+func createPluginWrappers(pmaasServerAdapter pmaasserver.PmaasServer, configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
 	wrappers := make([]*plugins.PluginWrapper, len(configuredPlugins))
 
 	for i, plugin := range configuredPlugins {
-		wrappers[i] = plugins.NewPluginWraper(plugin)
+		wrappers[i] = plugins.NewPluginWrapper(pmaasServerAdapter, plugin)
 	}
 
 	return wrappers
-}
-
-func hello(w http.ResponseWriter, _ *http.Request) {
-	_, err := io.WriteString(w, "Hello!\n")
-	if err != nil {
-		fmt.Printf("Error writing resposne: %v\n", err)
-	}
 }
 
 func (pmaas *PMAAS) Run() error {
@@ -158,7 +137,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 		}
 	}
 
-	var httpServer *HttpServer = nil
+	var httpServer *pmaashttp.HttpServer = nil
 
 	if startFailures == 0 {
 		httpServer, err = pmaas.startHttpServer()
@@ -187,30 +166,14 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	return err
 }
 
-func (pmaas *PMAAS) startHttpServer() (*HttpServer, error) {
-	serveMux := http.NewServeMux()
-	serveMux.HandleFunc("/hello", hello)
-	//serveMux.HandleFunc("/plugin", listPlugins)
-
-	for _, plugin := range pmaas.plugins {
-		fmt.Printf("Plugin %T config: %+v\n", plugin.Instance, plugin.Config)
-		if plugin.StaticContentDir != "" {
-			pmaas.configurePluginStaticContentDir(plugin, serveMux)
-		}
-
-		for _, httpRegistration := range plugin.HttpHandlers {
-			serveMux.HandleFunc(httpRegistration.Pattern, httpRegistration.HandlerFunc)
-		}
-	}
-
-	//fmt.Printf("ServeMux: %v\n", serveMux)
-
-	httpServer := NewHttpServer(serveMux, pmaas.config.HttpPort)
+func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
+	httpServer := pmaashttp.NewHttpServer(pmaas.config.HttpPort)
+	httpServer.RegisterPluginHandlers(pmaas.plugins)
 
 	return httpServer, httpServer.Start()
 }
 
-func stopHttpServer(httpServer *HttpServer) {
+func stopHttpServer(httpServer *pmaashttp.HttpServer) {
 	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancelFn()
 	err := httpServer.Stop(ctx)
@@ -343,44 +306,6 @@ func stopPluginRunner(plugin *plugins.PluginWrapper) {
 	}
 }
 
-func (pmaas *PMAAS) configurePluginStaticContentDir(plugin *plugins.PluginWrapper, serveMux *http.ServeMux) {
-	pluginPath := "/" + pmaas.getPluginPath(plugin) + "/"
-	pluginContentFS, staticContentDir := pmaas.getContentFS(plugin)
-
-	if pluginContentFS == nil {
-		fmt.Printf("Unable to serve static content for %s, plugin did not provide an fs.FS instance\n", pluginPath)
-		return
-	}
-
-	pluginContentReadDirFs, ok := pluginContentFS.(fs.ReadDirFS)
-
-	if !ok {
-		fmt.Printf("Unable to serve static content for %s, fs.FS instance provided by plugin does not "+
-			"implement fs.ReadDirFS\n", pluginPath)
-		return
-	}
-
-	_, err := pluginContentReadDirFs.ReadDir(plugin.StaticContentDir)
-
-	if err != nil {
-		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
-		return
-	}
-
-	pluginStaticContentFS, err := fs.Sub(pluginContentFS, plugin.StaticContentDir)
-
-	if err != nil {
-		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
-		return
-	}
-
-	fmt.Printf("Serving static content for %s from %s\n",
-		pluginPath, staticContentDir+"/"+plugin.StaticContentDir)
-	serveMux.Handle(pluginPath,
-		http.StripPrefix(pluginPath, http.FileServer(dirWithLogger{delegate: http.FS(pluginStaticContentFS)})))
-	serveMux.HandleFunc(pluginPath+"hello", hello)
-}
-
 func (pmaas *PMAAS) renderList(_ *plugins.PluginWrapper, w http.ResponseWriter, r *http.Request,
 	options spi.RenderListOptions, items []interface{}) {
 	alt := r.URL.Query()["alt"]
@@ -436,15 +361,13 @@ func (pmaas *PMAAS) getTemplate(
 		panic("No instance IPMAASTemplateEnginePlugin available")
 	}
 
-	contentFS, _ := pmaas.getContentFS(sourcePlugin)
+	contentFS, _ := sourcePlugin.ContentFs()
 
 	if contentFS == nil {
-		panic(fmt.Sprintf("No fs.FS implementation available for plugin %s", pmaas.getPluginPath(sourcePlugin)))
-	} else {
-		//fmt.Printf("Loading template %s from %s\n", templateInfo.Name, contentFSDescription)
+		panic(fmt.Sprintf("No fs.FS implementation available for plugin %s", sourcePlugin.PluginPath()))
 	}
 
-	webPath := "/" + pmaas.getPluginPath(sourcePlugin)
+	webPath := "/" + sourcePlugin.PluginPath()
 	updatedScripts := make([]string, len(templateInfo.Scripts))
 	updatedStyles := make([]string, len(templateInfo.Styles))
 
@@ -473,34 +396,6 @@ func (pmaas *PMAAS) getTemplate(
 	}()
 
 	return templateEnginePlugin.GetTemplate(&updatedTemplateInfo)
-}
-
-func (pmaas *PMAAS) getPluginPath(plugin *plugins.PluginWrapper) string {
-	pluginType := plugin.PluginType
-	return pluginType.PkgPath() + "/" + pluginType.Name()
-}
-
-func (pmaas *PMAAS) getContentFS(plugin *plugins.PluginWrapper) (fs.FS, string) {
-	if plugin.Config.ContentPathOverride != "" {
-		// The plugin config provided a path
-		contentFs := os.DirFS(plugin.Config.ContentPathOverride)
-		return contentFs, fmt.Sprintf("os.DirFS(%s)", plugin.Config.ContentPathOverride)
-	}
-
-	if pmaas.config.ContentPathRoot != "" {
-		// The server has a configured content root.  Does it have content for this plugin?
-		pluginPath := pmaas.getPluginPath(plugin)
-		pluginContentDir := pmaas.config.ContentPathRoot + "/" + pluginPath
-		fileInfo, err := os.Stat(pluginContentDir)
-
-		if err == nil && fileInfo.IsDir() {
-			// It does, so let's use it
-			contentFs := os.DirFS(pluginContentDir)
-			return contentFs, fmt.Sprintf("os.DirFS(%s)", pluginContentDir)
-		}
-	}
-
-	return plugin.ContentFS, fmt.Sprintf("%T(providedByPlugin)", plugin.ContentFS)
 }
 
 func (pmaas *PMAAS) getEntityRenderer(_ *plugins.PluginWrapper, entityType reflect.Type) (spi.EntityRenderer, error) {

@@ -1,4 +1,4 @@
-package http
+package plugins
 
 import "net/http"
 

@@ -2,20 +2,23 @@ package plugins
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
+	"os"
 	"reflect"
 	"sync"
 
 	"pmaas.io/core/config"
-	"pmaas.io/core/internal/http"
+	"pmaas.io/core/internal/pmaasserver"
 	"pmaas.io/spi"
 )
 
 type PluginWrapper struct {
+	server           pmaasserver.PmaasServer
 	Config           *config.PluginConfig
 	Instance         spi.IPMAASPlugin
-	HttpHandlers     []http.HttpHandlerRegistration
-	EntityRenderers  []http.EntityRendererRegistration
+	HttpHandlers     []HttpHandlerRegistration
+	EntityRenderers  []EntityRendererRegistration
 	StaticContentDir string
 	ContentFS        fs.FS
 	PluginType       reflect.Type
@@ -43,13 +46,14 @@ type PluginWrapper struct {
 	RunnerDoneCh chan error
 }
 
-func NewPluginWraper(pluginWithConfig config.PluginWithConfig) *PluginWrapper {
+func NewPluginWrapper(server pmaasserver.PmaasServer, pluginWithConfig config.PluginWithConfig) *PluginWrapper {
 	return &PluginWrapper{
+		server:               server,
 		Config:               &pluginWithConfig.Config,
 		Instance:             pluginWithConfig.Instance,
 		PluginType:           pluginWithConfig.PluginType,
-		HttpHandlers:         make([]http.HttpHandlerRegistration, 0),
-		EntityRenderers:      make([]http.EntityRendererRegistration, 0),
+		HttpHandlers:         make([]HttpHandlerRegistration, 0),
+		EntityRenderers:      make([]EntityRendererRegistration, 0),
 		ExecRequestCh:        nil,
 		ExecRequestChOpen:    false,
 		ExecRequestChClosed:  nil,
@@ -145,4 +149,32 @@ func (pwc *PluginWrapper) ExecInternal(target func()) error {
 	//fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
+}
+
+func (w *PluginWrapper) PluginPath() string {
+	return w.PluginType.PkgPath() + "/" + w.PluginType.Name()
+}
+
+func (w *PluginWrapper) ContentFs() (fs.FS, string) {
+	if w.Config.ContentPathOverride != "" {
+		// The plugin config provided a path
+		contentFs := os.DirFS(w.Config.ContentPathOverride)
+		return contentFs, fmt.Sprintf("os.DirFS(%s)", w.Config.ContentPathOverride)
+	}
+
+	contentPathRoot := w.server.ContentPathRoot()
+	if contentPathRoot != "" {
+		// The server has a configured content root.  Does it have content for this plugin?
+		pluginPath := w.PluginPath()
+		pluginContentDir := contentPathRoot + "/" + pluginPath
+		fileInfo, err := os.Stat(pluginContentDir)
+
+		if err == nil && fileInfo.IsDir() {
+			// It does, so let's use it
+			contentFs := os.DirFS(pluginContentDir)
+			return contentFs, fmt.Sprintf("os.DirFS(%s)", pluginContentDir)
+		}
+	}
+
+	return w.ContentFS, fmt.Sprintf("%T(providedByPlugin)", w.ContentFS)
 }

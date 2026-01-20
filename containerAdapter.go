@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"reflect"
 
-	pmaashttp "pmaas.io/core/internal/http"
 	"pmaas.io/core/internal/plugins"
 	"pmaas.io/spi"
 	"pmaas.io/spi/events"
@@ -24,7 +23,7 @@ type containerAdapter struct {
 var _ spi.IPMAASContainer = (*containerAdapter)(nil)
 
 func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
-	registration := pmaashttp.HttpHandlerRegistration{
+	registration := plugins.HttpHandlerRegistration{
 		Pattern:     path,
 		HandlerFunc: handlerFunc,
 	}
@@ -36,7 +35,7 @@ func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) err
 }
 
 func (ca *containerAdapter) RegisterEntityRenderer(entityType reflect.Type, rendererFactory spi.EntityRendererFactory) {
-	registration := pmaashttp.EntityRendererRegistration{
+	registration := plugins.EntityRendererRegistration{
 		EntityType:      entityType,
 		RendererFactory: rendererFactory,
 	}
