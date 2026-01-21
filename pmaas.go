@@ -83,7 +83,7 @@ func (pmaas *PMAAS) Run() error {
 func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	defer func() {
 		for i := len(pmaas.plugins) - 1; i >= 0; i-- {
-			stopPluginRunner(pmaas.plugins[i])
+			pmaas.plugins[i].StopPluginRunner()
 		}
 	}()
 
@@ -92,7 +92,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	// Start and initialize each plugin
 	for _, plugin := range pmaas.plugins {
 		// Start the plugin's plugin runner goroutine and call Init on the plugin
-		pmaas.startPluginRunner(plugin)
+		plugin.StartPluginRunner()
 
 		// Create a container adapter
 		ca := &containerAdapter{
@@ -216,7 +216,7 @@ func stopPlugins(plugins []*plugins.PluginWrapper) {
 				stopPlugin(plugin)
 			}
 		}
-		stopPluginRunner(plugin)
+		plugin.StopPluginRunner()
 		stopDuration := time.Now().Sub(startTime)
 		fmt.Printf("PMAAS Stopped %T in %v\n", plugin.Instance, stopDuration)
 	}
@@ -254,56 +254,6 @@ func stopPlugin2(plugin *plugins.PluginWrapper, instance spi.IPMAASPlugin2) {
 	}
 
 	plugin.Running = false
-}
-
-func (pmaas *PMAAS) startPluginRunner(plugin *plugins.PluginWrapper) {
-	// Initialize the runner control members
-	plugin.ExecRequestCh = make(chan func())
-	plugin.ExecRequestChOpen = true
-	plugin.ExecRequestChClosed = make(chan bool)
-	plugin.RunnerDoneCh = make(chan error)
-
-	// Spin up a goroutine to execute callbacks for the plugin.
-	go func() {
-		fmt.Printf("%T plugin runner START\n", plugin.Instance)
-		// Signal completion before exiting.
-		defer func() {
-			close(plugin.RunnerDoneCh)
-			fmt.Printf("%T plugin runner STOP\n", plugin.Instance)
-		}()
-
-		// Just keep executing until the channel closes.
-		for f := range plugin.ExecRequestCh {
-			f()
-		}
-	}()
-
-}
-
-func stopPluginRunner(plugin *plugins.PluginWrapper) {
-	if plugin.ExecRequestChOpen {
-		// Mark that execRequestCh is no longer open, so we don't try to close it twice
-		plugin.ExecRequestChOpen = false
-
-		// The solution here is inspired by "multiple senders one receiver" at
-		// https://go101.org/article/channel-closing.html
-
-		// Next, signal that execRequestCh channel is about to close
-		close(plugin.ExecRequestChClosed)
-
-		// Wait for any pending send operations complete.  They'll either complete the channel write operations,
-		// or bail out on the done signal.
-		plugin.ExecRequestChSendOps.Wait()
-
-		// Close the channel
-		close(plugin.ExecRequestCh)
-
-		// Finally, wait for the runner to indicate completion
-		err := <-plugin.RunnerDoneCh
-		if err != nil {
-			fmt.Printf("%T runner completed with error: %s\n", plugin.Instance, err)
-		}
-	}
 }
 
 func (pmaas *PMAAS) renderList(_ *plugins.PluginWrapper, w http.ResponseWriter, r *http.Request,

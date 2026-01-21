@@ -7,6 +7,7 @@ import (
 	"os"
 	"reflect"
 	"sync"
+	"sync/atomic"
 
 	"pmaas.io/core/config"
 	"pmaas.io/core/internal/pmaasserver"
@@ -31,10 +32,10 @@ type PluginWrapper struct {
 	// execRequestCh.  This is checked by the sender.
 	ExecRequestChClosed chan bool
 
-	// A boolean that tracks whether execRequestCh is open.  This is needed because the main pmaas Run function calls
-	// stopPluginRunner multiple times. Under normal execution, when the plugin is stopped, but there's also a fall-back
-	// deferred execution from the main Run function.
-	ExecRequestChOpen bool
+	// A boolean that tracks whether execRequestCh is open.  This is needed because the main pmaas Run function may call
+	// stopPluginRunner multiple times. Under normal execution, it only happens when the plugin is stopped, but there's
+	// also a fall-back deferred execution from the main Run function.
+	ExecRequestChOpen atomic.Bool
 
 	// A WaitGroup that counts the number of senders currently trying to write to execRequestCh. The stopPluginRunner
 	// function waits for this to be zero before actually closing execRequestCh.  This ensures that no writes to a
@@ -55,7 +56,7 @@ func NewPluginWrapper(server pmaasserver.PmaasServer, pluginWithConfig config.Pl
 		HttpHandlers:         make([]HttpHandlerRegistration, 0),
 		EntityRenderers:      make([]EntityRendererRegistration, 0),
 		ExecRequestCh:        nil,
-		ExecRequestChOpen:    false,
+		ExecRequestChOpen:    atomic.Bool{},
 		ExecRequestChClosed:  nil,
 		ExecRequestChSendOps: sync.WaitGroup{},
 		RunnerDoneCh:         nil,
@@ -136,7 +137,7 @@ func (pwc *PluginWrapper) ExecInternal(target func()) error {
 	//fmt.Printf("Attempting to send to execRequestCh\n")
 
 	// Either enqueue the callback or return an error if execRequestChClosed.  That should
-	// not happen, since closing is guarded by the execRequestChSendOps WaitGroup, but this
+	// not happen since closing is guarded by the execRequestChSendOps WaitGroup, but this
 	// will defensively avoid a lockup or send on a closed channel.
 	select {
 	case <-pwc.ExecRequestChClosed:
@@ -149,6 +150,54 @@ func (pwc *PluginWrapper) ExecInternal(target func()) error {
 	//fmt.Printf("Completed send to execRequestCh\n")
 
 	return err
+}
+
+func (pw *PluginWrapper) StartPluginRunner() {
+	// Initialize the runner control members
+	pw.ExecRequestCh = make(chan func())
+	pw.ExecRequestChOpen = atomic.Bool{}
+	pw.ExecRequestChClosed = make(chan bool)
+	pw.RunnerDoneCh = make(chan error)
+
+	// Spin up a goroutine to execute callbacks for the plugin.
+	go func() {
+		fmt.Printf("%T plugin runner START\n", pw.Instance)
+		// Signal completion before exiting.
+		defer func() {
+			close(pw.RunnerDoneCh)
+			fmt.Printf("%T plugin runner STOP\n", pw.Instance)
+		}()
+
+		// Just keep executing callbacks until the channel closes.
+		for f := range pw.ExecRequestCh {
+			f()
+		}
+	}()
+
+}
+
+func (pw *PluginWrapper) StopPluginRunner() {
+	if pw.ExecRequestChOpen.CompareAndSwap(true, false) {
+		// The solution here is inspired by "multiple senders one receiver" at
+		// https://go101.org/article/channel-closing.html
+
+		// Next, signal that the execRequestCh channel is closing
+		close(pw.ExecRequestChClosed)
+
+		// Wait for any pending send operations complete.  They'll either complete
+		// or bail out on the done signal.
+		pw.ExecRequestChSendOps.Wait()
+
+		// Close the channel
+		close(pw.ExecRequestCh)
+
+		// Finally, wait for the runner to indicate completion
+		err := <-pw.RunnerDoneCh
+
+		if err != nil {
+			fmt.Printf("%T runner completed with error: %s\n", pw.Instance, err)
+		}
+	}
 }
 
 func (w *PluginWrapper) PluginPath() string {
