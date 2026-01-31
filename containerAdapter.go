@@ -75,8 +75,8 @@ func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS, prefix string) {
 func (ca *containerAdapter) RegisterEntity(
 	uniqueData string, entityType reflect.Type,
 	name string,
-	invocationHandlerFn spi.EntityInvocationHandlerFunc) (string, error) {
-	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, invocationHandlerFn)
+	stubFactoryFn spi.EntityStubFactoryFunc) (string, error) {
+	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, stubFactoryFn)
 }
 
 func (ca *containerAdapter) DeregisterEntity(id string) error {
@@ -110,5 +110,6 @@ func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType re
 }
 
 func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity any)) error {
-	return ca.pmaas.invokeOnEntity(entityId, function)
+	//return ca.pmaas.invokeOnEntity(entityId, function)
+	panic("not implemented")
 }

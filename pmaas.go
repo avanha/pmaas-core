@@ -400,21 +400,44 @@ func (pmaas *PMAAS) getEntityRenderer(_ *plugins.PluginWrapper, entityType refle
 		fmt.Errorf("invalid EntityRenderer instance, both RenderFunc and StreamingRenderFunc are nil")
 }
 
+type stubFactoryResult struct {
+	stub any
+	err  error
+}
+
 func (pmaas *PMAAS) registerEntity(
 	sourcePlugin *plugins.PluginWrapper,
 	uniqueData string,
 	entityType reflect.Type,
 	name string,
-	invocationHandlerFn spi.EntityInvocationHandlerFunc) (string, error) {
+	stubFactoryFn spi.EntityStubFactoryFunc) (string, error) {
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.PluginType.PkgPath(), sourcePlugin.PluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
-	err := pmaas.entityManager.AddEntity(id, entityType, invocationHandlerFn)
+
+	wrappedStubFactory := func() (any, error) {
+		resultCh := make(chan stubFactoryResult)
+		err := sourcePlugin.ExecInternal(func() {
+			stub, factoryErr := stubFactoryFn()
+			resultCh <- stubFactoryResult{stub: stub, err: factoryErr}
+			close(resultCh)
+		})
+
+		if err != nil {
+			return nil, fmt.Errorf("stub creation failed, unable to execute stubFactory on plugin goroutine: %v", err)
+		}
+
+		result := <-resultCh
+
+		return result.stub, result.err
+	}
+
+	err := pmaas.entityManager.AddEntity(id, entityType, wrappedStubFactory)
 
 	if err != nil {
 		return "", err
 	}
 
-	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}}
+	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}, StubFactoryFn: wrappedStubFactory}
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
@@ -479,6 +502,7 @@ func (pmaas *PMAAS) assertEntityType(entityId string, entityType reflect.Type) e
 	return nil
 }
 
+/*
 func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) error {
 	entityRegistration, err := pmaas.entityManager.GetEntity(entityId)
 
@@ -502,6 +526,7 @@ func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) e
 
 	return nil
 }
+*/
 
 func (pmaas *PMAAS) enqueueOnServerGoRoutine(callbacks []func()) error {
 	return pmaas.dispatcher.Dispatch(callbacks)

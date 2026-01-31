@@ -10,10 +10,10 @@ import (
 )
 
 type addEntityRequest struct {
-	id                string
-	entityType        reflect.Type
-	invocationHandler spi.EntityInvocationHandlerFunc
-	responseCh        chan error
+	id            string
+	entityType    reflect.Type
+	stubFactoryFn spi.EntityStubFactoryFunc
+	responseCh    chan error
 }
 
 type getEntityRequest struct {
@@ -34,12 +34,12 @@ type removeEntityRequest struct {
 type EntityRecord interface {
 	GetId() string
 	GetEntityType() reflect.Type
-	GetInvocationHandler() spi.EntityInvocationHandlerFunc
+	GetStubFactoryFn() spi.EntityStubFactoryFunc
 }
 type entityRecord struct {
-	id                string
-	entityType        reflect.Type
-	invocationHandler spi.EntityInvocationHandlerFunc
+	id            string
+	entityType    reflect.Type
+	stubFactoryFn spi.EntityStubFactoryFunc
 }
 
 func (e entityRecord) GetId() string {
@@ -50,8 +50,8 @@ func (e entityRecord) GetEntityType() reflect.Type {
 	return e.entityType
 }
 
-func (e entityRecord) GetInvocationHandler() spi.EntityInvocationHandlerFunc {
-	return e.invocationHandler
+func (e entityRecord) GetStubFactoryFn() spi.EntityStubFactoryFunc {
+	return e.stubFactoryFn
 }
 
 type EntityManager struct {
@@ -169,9 +169,9 @@ func (em *EntityManager) handleAddEntityRequest(request addEntityRequest) error 
 	}
 
 	record := entityRecord{
-		id:                request.id,
-		entityType:        request.entityType,
-		invocationHandler: request.invocationHandler,
+		id:            request.id,
+		entityType:    request.entityType,
+		stubFactoryFn: request.stubFactoryFn,
 	}
 
 	em.entities[request.id] = record
@@ -210,13 +210,13 @@ func (em *EntityManager) handleRemoveEntityRequest(request removeEntityRequest) 
 func (em *EntityManager) AddEntity(
 	id string,
 	entityType reflect.Type,
-	invocationHandler spi.EntityInvocationHandlerFunc) error {
+	stubFactoryFn spi.EntityStubFactoryFunc) error {
 	responseCh := make(chan error)
 	request := addEntityRequest{
-		id:                id,
-		entityType:        entityType,
-		invocationHandler: invocationHandler,
-		responseCh:        responseCh}
+		id:            id,
+		entityType:    entityType,
+		stubFactoryFn: stubFactoryFn,
+		responseCh:    responseCh}
 
 	select {
 	case <-em.canSendCh:
