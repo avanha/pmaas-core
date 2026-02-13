@@ -1,7 +1,7 @@
-module pmaas.io/core
+module github.com/avanha/pmaas-core
 
 go 1.25
 
-require pmaas.io/spi v0.0.0
+require github.com/avanha/pmaas-spi v0.0.0
 
-replace pmaas.io/spi => ../pmaas-spi
+replace github.com/avanha/pmaas-spi => ../pmaas-spi

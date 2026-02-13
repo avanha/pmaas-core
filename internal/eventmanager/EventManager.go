@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"pmaas.io/core/internal/plugins"
-	"pmaas.io/spi/events"
+	"github.com/avanha/pmaas-core/internal/plugins"
+	"github.com/avanha/pmaas-spi/events"
 )
 
 type broadcastEventRequest struct {

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"reflect"
 
-	"pmaas.io/core/internal/plugins"
-	"pmaas.io/spi"
-	"pmaas.io/spi/events"
+	"github.com/avanha/pmaas-core/internal/plugins"
+	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/events"
 )
 
 // containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the

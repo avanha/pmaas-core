@@ -9,9 +9,9 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"pmaas.io/core/config"
-	"pmaas.io/core/internal/pmaasserver"
-	"pmaas.io/spi"
+	"github.com/avanha/pmaas-core/config"
+	"github.com/avanha/pmaas-core/internal/pmaasserver"
+	"github.com/avanha/pmaas-spi"
 )
 
 type PluginWrapper struct {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"pmaas.io/spi"
+	"github.com/avanha/pmaas-spi"
 )
 
 type addEntityRequest struct {

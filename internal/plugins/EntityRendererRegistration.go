@@ -3,7 +3,7 @@ package plugins
 import (
 	"reflect"
 
-	"pmaas.io/spi"
+	"github.com/avanha/pmaas-spi"
 )
 
 type EntityRendererRegistration struct {

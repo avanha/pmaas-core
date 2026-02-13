@@ -1,7 +1,7 @@
 package config
 
 import (
-	"pmaas.io/spi"
+	"github.com/avanha/pmaas-spi"
 )
 
 type Config struct {

@@ -7,7 +7,7 @@ import (
 	"io/fs"
 	"net/http"
 
-	"pmaas.io/core/internal/plugins"
+	"github.com/avanha/pmaas-core/internal/plugins"
 )
 
 type HttpServer struct {

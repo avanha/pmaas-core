@@ -3,7 +3,7 @@ package config
 import (
 	"reflect"
 
-	"pmaas.io/spi"
+	"github.com/avanha/pmaas-spi"
 )
 
 type PluginWithConfig struct {
