@@ -21,6 +21,7 @@ import (
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-core/internal/pmaasserver"
 	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/entity"
 	"github.com/avanha/pmaas-spi/events"
 )
 
@@ -484,6 +485,28 @@ func (pmaas *PMAAS) registerEventReceiver(
 func (pmaas *PMAAS) deregisterEventReceiver(
 	_ *plugins.PluginWrapper, handle int) error {
 	return pmaas.eventManager.RemoveReceiver(handle)
+}
+
+func (pmaas *PMAAS) getEntities(
+	predicate func(info *entity.RegisteredEntityInfo) bool) ([]entity.RegisteredEntityInfo, error) {
+	registrations, err := pmaas.entityManager.FindEntities(predicate)
+
+	if err != nil {
+		return nil, fmt.Errorf("getEntities failed: %w", err)
+	}
+
+	result := make([]entity.RegisteredEntityInfo, len(registrations))
+
+	for i, registration := range registrations {
+		result[i] = entity.RegisteredEntityInfo{
+			Id:            registration.GetId(),
+			EntityType:    registration.GetEntityType(),
+			Name:          "Name_" + registration.GetId(),
+			StubFactoryFn: registration.GetStubFactoryFn(),
+		}
+	}
+
+	return result, nil
 }
 
 func (pmaas *PMAAS) assertEntityType(entityId string, entityType reflect.Type) error {

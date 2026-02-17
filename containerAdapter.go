@@ -8,6 +8,7 @@ import (
 
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/entity"
 	"github.com/avanha/pmaas-spi/events"
 )
 
@@ -103,6 +104,11 @@ func (ca *containerAdapter) EnqueueOnPluginGoRoutine(f func()) error {
 
 func (ca *containerAdapter) EnqueueOnServerGoRoutine(f []func()) error {
 	return ca.pmaas.enqueueOnServerGoRoutine(f)
+}
+
+func (cs *containerAdapter) GetEntities(
+	predicate func(info *entity.RegisteredEntityInfo) bool) ([]entity.RegisteredEntityInfo, error) {
+	return cs.pmaas.getEntities(predicate)
 }
 
 func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType reflect.Type) error {

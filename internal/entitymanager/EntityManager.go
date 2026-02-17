@@ -7,6 +7,7 @@ import (
 	"reflect"
 
 	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/entity"
 )
 
 type addEntityRequest struct {
@@ -24,6 +25,16 @@ type getEntityRequest struct {
 type getEntityResponse struct {
 	entityRecord EntityRecord
 	err          error
+}
+
+type findEntitiesRequest struct {
+	predicate  entity.Predicate
+	responseCh chan findEntitiesResponse
+}
+
+type findEntitiesResponse struct {
+	entities []EntityRecord
+	err      error
 }
 
 type removeEntityRequest struct {
@@ -58,6 +69,7 @@ type EntityManager struct {
 	canSendCh      chan bool
 	addEntityCh    chan addEntityRequest
 	getEntityCh    chan getEntityRequest
+	findEntitiesCh chan findEntitiesRequest
 	removeEntityCh chan removeEntityRequest
 	runCancelFn    context.CancelFunc
 	runDoneCh      chan error
@@ -69,6 +81,7 @@ func NewEntityManager() *EntityManager {
 		canSendCh:      make(chan bool),
 		addEntityCh:    make(chan addEntityRequest),
 		getEntityCh:    make(chan getEntityRequest),
+		findEntitiesCh: make(chan findEntitiesRequest),
 		removeEntityCh: make(chan removeEntityRequest),
 		entities:       make(map[string]entityRecord),
 	}
@@ -120,6 +133,10 @@ LOOP1:
 			request.responseCh <- em.handleGetEntityRequest(request)
 			close(request.responseCh)
 			break
+		case request := <-em.findEntitiesCh:
+			request.responseCh <- em.handleFindEntitiesRequest(request)
+			close(request.responseCh)
+			break
 		case request := <-em.removeEntityCh:
 			request.responseCh <- em.handleRemoveEntityRequest(request)
 			close(request.responseCh)
@@ -141,6 +158,10 @@ LOOP2:
 			break
 		case request := <-em.getEntityCh:
 			request.responseCh <- em.handleGetEntityRequest(request)
+			close(request.responseCh)
+			break
+		case request := <-em.findEntitiesCh:
+			request.responseCh <- em.handleFindEntitiesRequest(request)
 			close(request.responseCh)
 			break
 		case request := <-em.removeEntityCh:
@@ -180,7 +201,7 @@ func (em *EntityManager) handleAddEntityRequest(request addEntityRequest) error 
 }
 
 func (em *EntityManager) handleGetEntityRequest(request getEntityRequest) getEntityResponse {
-	entity, ok := em.entities[request.id]
+	e, ok := em.entities[request.id]
 
 	if !ok {
 		return getEntityResponse{
@@ -190,8 +211,33 @@ func (em *EntityManager) handleGetEntityRequest(request getEntityRequest) getEnt
 	}
 
 	return getEntityResponse{
-		entityRecord: entity,
+		entityRecord: e,
 		err:          nil,
+	}
+}
+
+func (em *EntityManager) handleFindEntitiesRequest(request findEntitiesRequest) findEntitiesResponse {
+	entities := make([]EntityRecord, 0)
+
+	for _, e := range em.entities {
+		if request.predicate == nil {
+			entities = append(entities, e)
+		} else {
+			info := entity.RegisteredEntityInfo{
+				Id:            e.id,
+				EntityType:    e.entityType,
+				StubFactoryFn: e.stubFactoryFn,
+			}
+
+			if request.predicate(&info) {
+				entities = append(entities, e)
+			}
+		}
+	}
+
+	return findEntitiesResponse{
+		entities: entities,
+		err:      nil,
 	}
 }
 
@@ -261,4 +307,21 @@ func (em *EntityManager) RemoveEntity(registrationId string) error {
 	}
 
 	return <-responseCh
+}
+
+func (em *EntityManager) FindEntities(predicate entity.Predicate) ([]EntityRecord, error) {
+	responseCh := make(chan findEntitiesResponse)
+	request := findEntitiesRequest{predicate: predicate, responseCh: responseCh}
+
+	select {
+	case <-em.canSendCh:
+		close(responseCh)
+		return nil, errors.New("unable to find, EntityManager is no longer accepting requests")
+	case em.findEntitiesCh <- request:
+		break
+	}
+
+	response := <-responseCh
+
+	return response.entities, response.err
 }
