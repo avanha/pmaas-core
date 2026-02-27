@@ -119,3 +119,7 @@ func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity
 	//return ca.pmaas.invokeOnEntity(entityId, function)
 	panic("not implemented")
 }
+
+func (ca *containerAdapter) ClosedCallbackChannel() chan func() {
+	return ca.pmaas.closedCallbackChannel
+}

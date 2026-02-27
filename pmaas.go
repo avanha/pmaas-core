@@ -28,13 +28,14 @@ import (
 const PmaasServerPmaasEntityId = "PMAAS_SERVER"
 
 type PMAAS struct {
-	config             *config.Config
-	plugins            []*plugins.PluginWrapper
-	entityManager      *entitymanager.EntityManager
-	eventManager       *eventmanager.EventManager
-	dispatcher         *dispatcher.Dispatcher
-	selfType           reflect.Type
-	pmaasServerAdapter pmaasserver.PmaasServer
+	config                *config.Config
+	plugins               []*plugins.PluginWrapper
+	entityManager         *entitymanager.EntityManager
+	eventManager          *eventmanager.EventManager
+	dispatcher            *dispatcher.Dispatcher
+	selfType              reflect.Type
+	pmaasServerAdapter    pmaasserver.PmaasServer
+	closedCallbackChannel chan func()
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -47,6 +48,12 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
 	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, config.Plugins())
+
+	// Create a channel and close it right away.  Plugins can use this to avoid the repetition and overhead of
+	// creating and closing a channel.
+	instance.closedCallbackChannel = make(chan func())
+	close(instance.closedCallbackChannel)
+
 	return instance
 }
 
@@ -209,13 +216,7 @@ func stopPlugins(plugins []*plugins.PluginWrapper) {
 		plugin := plugins[i]
 		startTime := time.Now()
 		if plugin.Running {
-			plugin2, ok := plugin.Instance.(spi.IPMAASPlugin2)
-
-			if ok {
-				stopPlugin2(plugin, plugin2)
-			} else {
-				stopPlugin(plugin)
-			}
+			stopPlugin(plugin)
 		}
 		plugin.StopPluginRunner()
 		stopDuration := time.Now().Sub(startTime)
@@ -224,16 +225,8 @@ func stopPlugins(plugins []*plugins.PluginWrapper) {
 }
 
 func stopPlugin(plugin *plugins.PluginWrapper) {
-	err := plugin.ExecVoidFn(func() { plugin.Instance.Stop() })
-	plugin.Running = false
-	if err != nil {
-		fmt.Printf("%T Stop failed: %s\n", plugin.Instance, err)
-	}
-}
-
-func stopPlugin2(plugin *plugins.PluginWrapper, instance spi.IPMAASPlugin2) {
 	var callbackChannel chan func() = nil
-	err := plugin.ExecVoidFn(func() { callbackChannel = instance.StopAsync() })
+	err := plugin.ExecVoidFn(func() { callbackChannel = plugin.Instance.Stop() })
 
 	if err != nil {
 		fmt.Printf("%T Stop failed: %s\n", plugin.Instance, err)
