@@ -19,8 +19,8 @@ masterBedroom.When()
 
 A program that instantiates the pmaas-core and configures some number of plugins is callend an assembly.  There are a few public assemblies:
 
-Demo - https://github.com/avanha/pmaas-assembly-demo
-Minimal - https://github.com/avanha/pmaas-assembly-minimal
+- Demo - https://github.com/avanha/pmaas-assembly-demo
+- Minimal - https://github.com/avanha/pmaas-assembly-minimal
 
 
 ### Why PMAAS?
