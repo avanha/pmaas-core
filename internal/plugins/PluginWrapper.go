@@ -174,6 +174,8 @@ func (pw *PluginWrapper) StartPluginRunner() {
 		}
 	}()
 
+	// Mark as open
+	pw.ExecRequestChOpen.Store(true)
 }
 
 func (pw *PluginWrapper) StopPluginRunner() {

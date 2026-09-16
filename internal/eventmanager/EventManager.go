@@ -70,7 +70,6 @@ func NewEventManager() *EventManager {
 func (em *EventManager) Start() error {
 	ctx, cancelFn := context.WithCancel(context.Background())
 	doneCh := make(chan error)
-	go em.run(ctx, doneCh)
 	em.runningCh = make(chan bool)
 	em.broadcastEventCh = make(chan broadcastEventRequest)
 	em.addReceiverCh = make(chan addReceiverRequest)
@@ -78,6 +77,7 @@ func (em *EventManager) Start() error {
 	em.dispatchEventCh = make(chan dispatchRequest, 100)
 	em.runCancelFn = cancelFn
 	em.runDoneCh = doneCh
+	go em.run(ctx, doneCh)
 	return nil
 }
 
