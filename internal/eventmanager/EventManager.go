@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync/atomic"
 
+	"github.com/avanha/pmaas-common/queue"
 	"github.com/avanha/pmaas-core/internal/mailbox"
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-spi/events"
@@ -40,7 +41,7 @@ type EventManager struct {
 	mailbox            *mailbox.Mailbox
 	addReceiverCounter int
 	receivers          map[int]receiverRecord
-	dispatchEventCh    chan dispatchRequest
+	dispatchEventCh    *queue.UnboundedChannel[dispatchRequest]
 	dispatchDoneCh     chan error
 
 	// Guards Stop so that only the first call performs the shutdown sequence.
@@ -58,12 +59,12 @@ func NewEventManager() *EventManager {
 func (em *EventManager) Start() error {
 	fmt.Printf("Event manager starting\n")
 	em.mailbox = mailbox.NewMailbox()
-	em.dispatchEventCh = make(chan dispatchRequest, 100)
+	em.dispatchEventCh = queue.NewUnboundedChannel[dispatchRequest]()
 	em.dispatchDoneCh = make(chan error)
 
 	// Execution of registered listeners is done in a separate GoRoutine to allow
 	// event receivers to perform register/deregister operations.
-	go dispatchEvents(em.dispatchEventCh, em.dispatchDoneCh)
+	go dispatchEvents(em.dispatchEventCh.Out(), em.dispatchDoneCh)
 
 	return nil
 }
@@ -75,7 +76,7 @@ func (em *EventManager) Stop(ctx context.Context) error {
 
 	// Safe to call multiple times; only the first call does anything.
 	if !em.stopped.CompareAndSwap(false, true) {
-		fmt.Printf("Event manager already stopping\n")
+		fmt.Printf("Event manager already stoppingx\n")
 		return nil
 	}
 
@@ -91,7 +92,7 @@ func (em *EventManager) Stop(ctx context.Context) error {
 		em.mailbox.Stop()
 
 		// Signal the dispatcher GoRoutine to stop and wait for it to terminate
-		close(em.dispatchEventCh)
+		em.dispatchEventCh.Close()
 		dispatchErr := <-em.dispatchDoneCh
 
 		if dispatchErr != nil {
@@ -164,7 +165,7 @@ func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
 
 	for _, record := range em.receivers {
 		if record.predicate(eventInfo) {
-			em.dispatchEventCh <- dispatchRequest{
+			em.dispatchEventCh.In() <- dispatchRequest{
 				eventInfo: eventInfo,
 				receiver:  record.receiver,
 				handle:    record.handle,
@@ -204,7 +205,7 @@ func (em *EventManager) handleRemoveReceiver(receiverHandle int) error {
 	return nil
 }
 
-func dispatchEvents(dispatchRequestCh chan dispatchRequest, doneCh chan error) {
+func dispatchEvents(dispatchRequestCh <-chan dispatchRequest, doneCh chan error) {
 	defer close(doneCh)
 
 	for request := range dispatchRequestCh {
