@@ -24,10 +24,23 @@ type containerAdapter struct {
 var _ spi.IPMAASContainer = (*containerAdapter)(nil)
 
 func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
+	ca.AddRouteWithOptions(
+		path,
+		handlerFunc,
+		&spi.HttpHandlerOptions{
+			SupportsXsrfValidation: true,
+		})
+}
+
+func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.HandlerFunc,
+	options *spi.HttpHandlerOptions) {
 	registration := plugins.HttpHandlerRegistration{
-		Pattern:     path,
-		HandlerFunc: handlerFunc,
+		Pattern:                path,
+		HandlerFunc:            handlerFunc,
+		SupportsXsrfValidation: options.SupportsXsrfValidation,
+		RequiresXsrfValidation: options.RequiresXsrfValidation,
 	}
+
 	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
 }
 

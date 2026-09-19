@@ -10,6 +10,8 @@ import (
 	"github.com/avanha/pmaas-core/internal/plugins"
 )
 
+var XsrfValidationStatus = "xsrf-validation-status"
+
 type HttpServer struct {
 	mux            *http.ServeMux
 	port           int
@@ -33,7 +35,17 @@ func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 		}
 
 		for _, httpRegistration := range plugin.HttpHandlers {
-			hs.mux.HandleFunc(httpRegistration.Pattern, httpRegistration.HandlerFunc)
+			handler := httpRegistration.HandlerFunc
+
+			if httpRegistration.SupportsXsrfValidation || httpRegistration.RequiresXsrfValidation {
+				handler = xsrfMiddleware(handler)
+			}
+
+			if httpRegistration.RequiresXsrfValidation {
+				handler = xsrfRequiredMiddleware(handler)
+			}
+
+			hs.mux.HandleFunc(httpRegistration.Pattern, handler)
 		}
 	}
 }
@@ -136,5 +148,57 @@ func helloHandler(w http.ResponseWriter, _ *http.Request) {
 	_, err := io.WriteString(w, "Hello!\n")
 	if err != nil {
 		fmt.Printf("Error writing response: %v\n", err)
+	}
+}
+
+func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		currentCookie, err := r.Cookie("ra-src")
+
+		if err != nil {
+			// This is no cookie, proeed
+			next(w, r)
+			writeRaSrc(w)
+			return
+		}
+
+		raValue := r.Header.Get("ra")
+
+		if raValue == "" {
+			// There is no ra header, proceed
+			next(w, r)
+			writeRaSrc(w)
+			return
+		}
+
+		if raValue != currentCookie.Value {
+			http.Error(w, "XSRF validation failed", http.StatusForbidden)
+			return
+		}
+
+		next(w, r.WithContext(context.WithValue(r.Context(), XsrfValidationStatus, true)))
+		writeRaSrc(w)
+	}
+}
+
+func writeRaSrc(w http.ResponseWriter) {
+	newCookie := http.Cookie{
+		Name:     "ra-src",
+		Value:    "authorized",
+		Path:     "/",
+		HttpOnly: false,
+		SameSite: http.SameSiteStrictMode,
+	}
+	http.SetCookie(w, &newCookie)
+}
+
+func xsrfRequiredMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Context().Value(XsrfValidationStatus) == nil {
+			http.Error(w, "XSRF validation required", http.StatusBadRequest)
+			return
+		}
+
+		next(w, r)
 	}
 }
