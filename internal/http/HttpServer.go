@@ -24,40 +24,40 @@ func NewHttpServer(port int) *HttpServer {
 	return httpServer
 }
 
-func (httpServer *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
+func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 	for _, plugin := range plugins {
 		fmt.Printf("Plugin %T config: %+v\n", plugin.Instance, plugin.Config)
 
 		if plugin.StaticContentDir != "" {
-			httpServer.configurePluginStaticContentDir(plugin, httpServer.mux)
+			hs.configurePluginStaticContentDir(plugin, hs.mux)
 		}
 
 		for _, httpRegistration := range plugin.HttpHandlers {
-			httpServer.mux.HandleFunc(httpRegistration.Pattern, httpRegistration.HandlerFunc)
+			hs.mux.HandleFunc(httpRegistration.Pattern, httpRegistration.HandlerFunc)
 		}
 	}
 }
 
-func (httpServer *HttpServer) Start() error {
-	httpServer.serverInstance = &http.Server{
-		Addr:    fmt.Sprintf(":%d", httpServer.port),
-		Handler: httpServer.mux,
+func (hs *HttpServer) Start() error {
+	hs.serverInstance = &http.Server{
+		Addr:    fmt.Sprintf(":%d", hs.port),
+		Handler: hs.mux,
 	}
 
 	doneCh := make(chan error)
-	httpServer.runDoneCh = doneCh
-	go func() { run(httpServer.serverInstance, doneCh) }()
+	hs.runDoneCh = doneCh
+	go func() { run(hs.serverInstance, doneCh) }()
 
 	return nil
 }
 
-func (httpServer *HttpServer) Stop(ctx context.Context) error {
-	if httpServer.serverInstance == nil {
+func (hs *HttpServer) Stop(ctx context.Context) error {
+	if hs.serverInstance == nil {
 		return nil
 	}
 
-	serverInstance := httpServer.serverInstance
-	httpServer.serverInstance = nil
+	serverInstance := hs.serverInstance
+	hs.serverInstance = nil
 
 	fmt.Printf("HttpServer: Shutdown started...\n")
 	var err = serverInstance.Shutdown(ctx)
@@ -71,7 +71,7 @@ func (httpServer *HttpServer) Stop(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return fmt.Errorf("error stopping HttpServer, context done signal received while waiting for termination: %v", ctx.Err())
-	case err := <-httpServer.runDoneCh:
+	case err := <-hs.runDoneCh:
 		if err != nil {
 			fmt.Printf("HttpServer: Terminated with error: %v", err)
 		}
@@ -79,7 +79,7 @@ func (httpServer *HttpServer) Stop(ctx context.Context) error {
 	}
 }
 
-func (s *HttpServer) configurePluginStaticContentDir(plugin *plugins.PluginWrapper, serveMux *http.ServeMux) {
+func (hs *HttpServer) configurePluginStaticContentDir(plugin *plugins.PluginWrapper, serveMux *http.ServeMux) {
 	pluginPath := "/" + plugin.PluginPath() + "/"
 	pluginContentFS, staticContentDir := plugin.ContentFs()
 
