@@ -1,6 +1,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -42,6 +43,47 @@ func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.Ha
 	}
 
 	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
+}
+
+func (ca *containerAdapter) AddJsonRoute(
+	path string,
+	requestFactoryFunc spi.RequestObjectFactoryFunc,
+	handlerFunc spi.JsonHandlerFunc) {
+	ca.AddRouteWithOptions(
+		path,
+		func(w http.ResponseWriter, r *http.Request) {
+			request := requestFactoryFunc()
+
+			// Parse the request body if there is one
+			if r.ContentLength != 0 && r.Header.Get("Content-Type") == "application/json" {
+				err := json.NewDecoder(r.Body).Decode(request)
+
+				if err != nil {
+					http.Error(w, "Failed to parse request body", http.StatusBadRequest)
+					return
+				}
+			}
+
+			jsonResponse, err := handlerFunc(w, r, request)
+
+			if err != nil {
+				http.Error(w, fmt.Sprintf("Failed to handle request: %v", err), http.StatusInternalServerError)
+				return
+			}
+
+			w.Header().Set("Content-Type", "application/json")
+
+			err = json.NewEncoder(w).Encode(jsonResponse)
+
+			if err != nil {
+				http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+				return
+			}
+		},
+		&spi.HttpHandlerOptions{
+			RequiresXsrfValidation: true,
+			SupportsXsrfValidation: true,
+		})
 }
 
 func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) error {

@@ -2,9 +2,11 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"io"
 	"io/fs"
+	"math/rand"
 	"net/http"
 
 	"github.com/avanha/pmaas-core/internal/plugins"
@@ -37,12 +39,12 @@ func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 		for _, httpRegistration := range plugin.HttpHandlers {
 			handler := httpRegistration.HandlerFunc
 
-			if httpRegistration.SupportsXsrfValidation || httpRegistration.RequiresXsrfValidation {
-				handler = xsrfMiddleware(handler)
-			}
-
 			if httpRegistration.RequiresXsrfValidation {
 				handler = xsrfRequiredMiddleware(handler)
+			}
+
+			if httpRegistration.SupportsXsrfValidation || httpRegistration.RequiresXsrfValidation {
+				handler = xsrfMiddleware(handler)
 			}
 
 			hs.mux.HandleFunc(httpRegistration.Pattern, handler)
@@ -154,37 +156,36 @@ func helloHandler(w http.ResponseWriter, _ *http.Request) {
 func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		currentCookie, err := r.Cookie("ra-src")
+		currentRaValue := ""
 
-		if err != nil {
-			// This is no cookie, proeed
-			next(w, r)
+		if err == nil {
+			currentRaValue = currentCookie.Value
+		}
+
+		suppliedRaValue := r.Header.Get("ra")
+
+		if suppliedRaValue == "" && currentRaValue == "" {
+			// There is no ra-src cookie and no ra header, proceed
 			writeRaSrc(w)
+			next(w, r)
 			return
 		}
 
-		raValue := r.Header.Get("ra")
-
-		if raValue == "" {
-			// There is no ra header, proceed
-			next(w, r)
-			writeRaSrc(w)
-			return
-		}
-
-		if raValue != currentCookie.Value {
+		if subtle.ConstantTimeCompare([]byte(suppliedRaValue), []byte(currentRaValue)) != 1 {
 			http.Error(w, "XSRF validation failed", http.StatusForbidden)
 			return
 		}
 
-		next(w, r.WithContext(context.WithValue(r.Context(), XsrfValidationStatus, true)))
 		writeRaSrc(w)
+		next(w, r.WithContext(context.WithValue(r.Context(), XsrfValidationStatus, true)))
 	}
 }
 
 func writeRaSrc(w http.ResponseWriter) {
+	value := fmt.Sprintf("authorization%d", rand.Int63())
 	newCookie := http.Cookie{
 		Name:     "ra-src",
-		Value:    "authorized",
+		Value:    value,
 		Path:     "/",
 		HttpOnly: false,
 		SameSite: http.SameSiteStrictMode,
