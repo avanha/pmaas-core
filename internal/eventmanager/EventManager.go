@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"sync/atomic"
 
+	"github.com/avanha/pmaas-common/mailbox"
 	"github.com/avanha/pmaas-common/queue"
-	"github.com/avanha/pmaas-core/internal/mailbox"
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-spi/events"
 )

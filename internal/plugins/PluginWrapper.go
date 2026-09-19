@@ -6,8 +6,8 @@ import (
 	"os"
 	"reflect"
 
+	"github.com/avanha/pmaas-common/mailbox"
 	"github.com/avanha/pmaas-core/config"
-	"github.com/avanha/pmaas-core/internal/mailbox"
 	"github.com/avanha/pmaas-core/internal/pmaasserver"
 	"github.com/avanha/pmaas-spi"
 )
