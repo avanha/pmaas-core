@@ -171,7 +171,8 @@ func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if subtle.ConstantTimeCompare([]byte(suppliedRaValue), []byte(currentRaValue)) != 1 {
+		if suppliedRaValue != "" && subtle.ConstantTimeCompare([]byte(suppliedRaValue), []byte(currentRaValue)) != 1 {
+			// Token was supplied but does not match the current value
 			http.Error(w, "XSRF validation failed", http.StatusForbidden)
 			return
 		}
