@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/avanha/pmaas-core/config"
+	"github.com/avanha/pmaas-core/internal/configstore"
 	"github.com/avanha/pmaas-core/internal/dispatcher"
 	"github.com/avanha/pmaas-core/internal/entitymanager"
 	"github.com/avanha/pmaas-core/internal/eventmanager"
@@ -36,6 +37,7 @@ type PMAAS struct {
 	selfType              reflect.Type
 	pmaasServerAdapter    pmaasserver.PmaasServer
 	closedCallbackChannel chan func()
+	configStore           *configstore.ConfigStore
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -44,6 +46,7 @@ func NewPMAAS(config *config.Config) *PMAAS {
 		entityManager: entitymanager.NewEntityManager(),
 		eventManager:  eventmanager.NewEventManager(),
 		dispatcher:    dispatcher.NewDispatcher(),
+		configStore:   configstore.NewConfigStore(),
 	}
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
@@ -543,6 +546,14 @@ func (pmaas *PMAAS) invokeOnEntity(entityId string, function func(entity any)) e
 	return nil
 }
 */
+
+func (pmaas *PMAAS) loadConfig(pluginType reflect.Type, targetFactoryFunc func(string) any) (any, error) {
+	return pmaas.configStore.Load(pluginType, targetFactoryFunc)
+}
+
+func (pmaas *PMAAS) saveConfig(pluginType reflect.Type, config any) error {
+	return pmaas.configStore.Save(pluginType, config)
+}
 
 func (pmaas *PMAAS) enqueueOnServerGoRoutine(callbacks []func()) error {
 	return pmaas.dispatcher.Dispatch(callbacks)

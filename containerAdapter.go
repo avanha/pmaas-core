@@ -178,3 +178,11 @@ func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity
 func (ca *containerAdapter) ClosedCallbackChannel() chan func() {
 	return ca.pmaas.closedCallbackChannel
 }
+
+func (ca *containerAdapter) LoadConfig(targetFactoryFunc func(string) any) (any, error) {
+	return ca.pmaas.loadConfig(ca.target.PluginType, targetFactoryFunc)
+}
+
+func (ca *containerAdapter) SaveConfig(config any) error {
+	return ca.pmaas.saveConfig(ca.target.PluginType, config)
+}
