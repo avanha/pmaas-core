@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os/signal"
 	"reflect"
 	"strings"
@@ -175,6 +176,26 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	fmt.Printf("pmaas.Run: End\n")
 
 	return err
+}
+
+// getBaseUrl picks the configured base URL matching the given request's Host header. The scheme and
+// host are always taken from configuration, never from the request itself: a request only selects
+// which pre-configured base URL applies, it never supplies the value directly.
+func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
+	for _, baseUrl := range pmaas.config.BaseURLs {
+		parsed, err := url.Parse(baseUrl)
+
+		if err != nil {
+			fmt.Printf("pmaas.getBaseUrl: ignoring invalid configured base URL %q: %v\n", baseUrl, err)
+			continue
+		}
+
+		if parsed.Host == r.Host {
+			return baseUrl, nil
+		}
+	}
+
+	return "", fmt.Errorf("no configured base URL matches request host %q", r.Host)
 }
 
 func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {

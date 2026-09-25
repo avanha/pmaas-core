@@ -114,6 +114,10 @@ func (ca *containerAdapter) EnableStaticContent(staticContentDir string) {
 	ca.target.StaticContentDir = staticContentDir
 }
 
+func (ca *containerAdapter) GetBaseUrl(r *http.Request) (string, error) {
+	return ca.pmaas.getBaseUrl(r)
+}
+
 func (ca *containerAdapter) ProvideContentFS(contentFS fs.FS, prefix string) {
 	if prefix == "" {
 		ca.target.ContentFS = contentFS
