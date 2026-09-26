@@ -33,16 +33,31 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 		})
 }
 
+// AddRouteWithOptions namespaces path under this plugin's own "/plugins/<ShortName>/" prefix (see
+// spi.PluginFullPath) and, based on options, records it in the server's navigation menu registry.
 func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.HandlerFunc,
 	options *spi.HttpHandlerOptions) {
+	pluginShortName := ca.target.ShortName()
+	fullPath := spi.PluginFullPath(pluginShortName, path)
+
 	registration := plugins.HttpHandlerRegistration{
-		Pattern:                path,
+		Pattern:                fullPath,
 		HandlerFunc:            handlerFunc,
 		SupportsXsrfValidation: options.SupportsXsrfValidation,
 		RequiresXsrfValidation: options.RequiresXsrfValidation,
 	}
 
 	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
+
+	ca.pmaas.registerMenuRoute(pluginShortName, fullPath, path, options)
+}
+
+func (ca *containerAdapter) RouteFullPath(relativePath string) string {
+	return spi.PluginFullPath(ca.target.ShortName(), relativePath)
+}
+
+func (ca *containerAdapter) AssetFullPath(relativePath string) string {
+	return spi.PluginAssetFullPath(ca.target.ShortName(), relativePath)
 }
 
 func (ca *containerAdapter) AddJsonRoute(
@@ -84,6 +99,10 @@ func (ca *containerAdapter) AddJsonRoute(
 			RequiresXsrfValidation: true,
 			SupportsXsrfValidation: true,
 		})
+}
+
+func (ca *containerAdapter) GetMenu() []spi.MenuEntry {
+	return ca.pmaas.getMenu()
 }
 
 func (ca *containerAdapter) BroadcastEvent(sourceEntityId string, event any) error {

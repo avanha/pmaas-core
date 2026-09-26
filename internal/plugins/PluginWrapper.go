@@ -78,6 +78,14 @@ func (w *PluginWrapper) StopPluginRunner() {
 	fmt.Printf("%T plugin runner STOP\n", w.Instance)
 }
 
+// ShortName returns the plugin's own stable identifier, used to namespace its routes under
+// "/plugins/<ShortName>/" (see spi.PluginFullPath). This is unrelated to PluginPath, which is
+// derived from the plugin's Go type via reflection and used only for static content/template
+// asset URLs.
+func (w *PluginWrapper) ShortName() string {
+	return w.Instance.ShortName()
+}
+
 func (w *PluginWrapper) PluginPath() string {
 	return w.PluginType.PkgPath() + "/" + w.PluginType.Name()
 }

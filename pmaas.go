@@ -39,6 +39,14 @@ type PMAAS struct {
 	pmaasServerAdapter    pmaasserver.PmaasServer
 	closedCallbackChannel chan func()
 	configStore           *configstore.ConfigStore
+
+	// menuEntries/menuEntriesByShortName hold the navigation menu built from every plugin's
+	// menu-visible routes (see registerMenuRoute). Both are populated only while plugins are
+	// being initialized (Init runs synchronously, plugin by plugin, before the HTTP server ever
+	// starts accepting requests) and are never modified afterward, so getMenu can be called from
+	// any goroutine without locking.
+	menuEntries            []*spi.MenuEntry
+	menuEntriesByShortName map[string]*spi.MenuEntry
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -57,8 +65,67 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	// creating and closing a channel.
 	instance.closedCallbackChannel = make(chan func())
 	close(instance.closedCallbackChannel)
+	instance.menuEntriesByShortName = make(map[string]*spi.MenuEntry)
 
 	return instance
+}
+
+// registerMenuRoute records fullPath's navigation-menu visibility for pluginShortName, applying
+// HttpHandlerOptions' defaults: a plugin's list route (relativePath "") defaults to included, every
+// other route defaults to excluded - either can be overridden via options.IncludeInMenu. Only one
+// level of nesting is supported: every included non-list-route becomes a flat child of its plugin's
+// single menu entry, regardless of how many path segments its relativePath has. Called only while
+// plugins are being initialized (see containerAdapter.AddRouteWithOptions), before the HTTP server
+// starts, so no synchronization is needed here or in getMenu.
+func (pmaas *PMAAS) registerMenuRoute(
+	pluginShortName string, fullPath string, relativePath string, options *spi.HttpHandlerOptions) {
+	isListRoute := relativePath == ""
+
+	include := isListRoute
+	if options.IncludeInMenu != nil {
+		include = *options.IncludeInMenu
+	}
+
+	if !include {
+		return
+	}
+
+	label := options.MenuLabel
+	if label == "" {
+		if isListRoute {
+			label = pluginShortName
+		} else {
+			label = relativePath
+		}
+	}
+
+	entry := pmaas.menuEntriesByShortName[pluginShortName]
+
+	if entry == nil {
+		entry = &spi.MenuEntry{}
+		pmaas.menuEntriesByShortName[pluginShortName] = entry
+		pmaas.menuEntries = append(pmaas.menuEntries, entry)
+	}
+
+	if isListRoute {
+		entry.Path = fullPath
+		entry.Label = label
+		entry.Icon = options.MenuIcon
+	} else {
+		entry.Children = append(entry.Children, spi.MenuEntry{Path: fullPath, Label: label, Icon: options.MenuIcon})
+	}
+}
+
+// getMenu returns a snapshot of the navigation menu. Each top-level entry is copied out of the
+// pmaas.menuEntries pointers so the caller can't mutate this PMAAS instance's own state through it.
+func (pmaas *PMAAS) getMenu() []spi.MenuEntry {
+	result := make([]spi.MenuEntry, len(pmaas.menuEntries))
+
+	for i, entry := range pmaas.menuEntries {
+		result[i] = *entry
+	}
+
+	return result
 }
 
 func createPluginWrappers(pmaasServerAdapter pmaasserver.PmaasServer, configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
@@ -335,16 +402,15 @@ func (pmaas *PMAAS) getTemplate(
 		panic(fmt.Sprintf("No fs.FS implementation available for plugin %s", sourcePlugin.PluginPath()))
 	}
 
-	webPath := "/" + sourcePlugin.PluginPath()
 	updatedScripts := make([]string, len(templateInfo.Scripts))
 	updatedStyles := make([]string, len(templateInfo.Styles))
 
 	for i, script := range templateInfo.Scripts {
-		updatedScripts[i] = webPath + "/" + script
+		updatedScripts[i] = spi.PluginAssetFullPath(sourcePlugin.ShortName(), script)
 	}
 
 	for i, style := range templateInfo.Styles {
-		updatedStyles[i] = webPath + "/" + style
+		updatedStyles[i] = spi.PluginAssetFullPath(sourcePlugin.ShortName(), style)
 	}
 
 	updatedTemplateInfo := spi.TemplateInfo{
