@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -150,16 +151,20 @@ func run(httpServer *http.Server, doneCh chan error) {
 	defer func() { close(doneCh) }()
 
 	var err error
-	if httpServer.TLSConfig != nil {
+	var functionName string
+	if httpServer.TLSConfig == nil {
+		functionName = "ListenAndServe"
+		err = httpServer.ListenAndServe()
+	} else {
+		functionName = "ListenAndServeTLS"
+
 		// Both filenames are empty because the certificate is served entirely via
 		// TLSConfig.GetCertificate (see SetTLSCertificateProvider), never from files on disk.
 		err = httpServer.ListenAndServeTLS("", "")
-	} else {
-		err = httpServer.ListenAndServe()
 	}
 
-	if err == nil || err == http.ErrServerClosed {
-		fmt.Printf("HttpServer: run() ListenAndServe completed\n")
+	if err == nil || errors.Is(err, http.ErrServerClosed) {
+		fmt.Printf("HttpServer: run() %s completed\n", functionName)
 		err = nil
 	} else {
 		fmt.Printf("HttpServer: run() ListenAndServe completed with error: %s\n", err)
