@@ -22,13 +22,32 @@ type HttpServer struct {
 	serverInstance *http.Server
 	runDoneCh      chan error
 	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+	rootHandler    http.HandlerFunc
 }
 
 func NewHttpServer(port int) *HttpServer {
 	httpServer := &HttpServer{mux: http.NewServeMux(), port: port}
 	httpServer.mux.HandleFunc("/hello", helloHandler)
+	// "/{$}" matches only the exact root path, not every otherwise-unmatched request (which is
+	// what a plain "/" pattern would do) - see SetRootHandler.
+	httpServer.mux.HandleFunc("/{$}", httpServer.handleRoot)
 	//serveMux.HandleFunc("/plugin", listPlugins)
 	return httpServer
+}
+
+// SetRootHandler overrides the server's default root ("/") page with handler. Must be called
+// before Start. If never called, "/" serves defaultRootHandler instead.
+func (hs *HttpServer) SetRootHandler(handler http.HandlerFunc) {
+	hs.rootHandler = handler
+}
+
+func (hs *HttpServer) handleRoot(w http.ResponseWriter, r *http.Request) {
+	if hs.rootHandler != nil {
+		hs.rootHandler(w, r)
+		return
+	}
+
+	defaultRootHandler(w, r)
 }
 
 func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
@@ -170,6 +189,13 @@ func run(httpServer *http.Server, doneCh chan error) {
 	} else {
 		fmt.Printf("HttpServer: run() ListenAndServe completed with error: %s\n", err)
 		doneCh <- err
+	}
+}
+
+func defaultRootHandler(w http.ResponseWriter, _ *http.Request) {
+	_, err := io.WriteString(w, "Hello, no status provider available")
+	if err != nil {
+		fmt.Printf("Error writing response: %v\n", err)
 	}
 }
 

@@ -54,6 +54,17 @@ type PMAAS struct {
 	// plugin has finished starting (see internalRun). Like menuEntries, it's only ever written while
 	// plugins are being initialized/started sequentially, so no locking is needed here.
 	tlsCertificateProvider func(*tls.ClientHelloInfo) (*tls.Certificate, error)
+
+	// rootStatusHandler is set by at most one plugin's ProvideRootStatusHandler call, during
+	// Init or Start, under the same timing/locking reasoning as tlsCertificateProvider above.
+	rootStatusHandler spi.RootStatusHandlerFunc
+
+	// startTime/pluginVersions back getServerStatus's ServerStatus.Uptime/Plugins. startTime is
+	// set once, in NewPMAAS, and pluginVersions is resolved once, right after instance.plugins
+	// is populated - neither ever changes afterward, so getServerStatus can read them from any
+	// goroutine without locking.
+	startTime      time.Time
+	pluginVersions []spi.PluginVersion
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -63,10 +74,12 @@ func NewPMAAS(config *config.Config) *PMAAS {
 		eventManager:  eventmanager.NewEventManager(),
 		dispatcher:    dispatcher.NewDispatcher(),
 		configStore:   configstore.NewConfigStore(),
+		startTime:     time.Now(),
 	}
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
 	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, config.Plugins())
+	instance.pluginVersions = collectPluginVersions(instance.plugins)
 
 	// Create a channel and close it right away.  Plugins can use this to avoid the repetition and overhead of
 	// creating and closing a channel.
@@ -280,7 +293,30 @@ func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
 		httpServer.SetTLSCertificateProvider(pmaas.tlsCertificateProvider)
 	}
 
+	if pmaas.rootStatusHandler != nil {
+		httpServer.SetRootHandler(pmaas.handleRootStatusRequest)
+	}
+
 	return httpServer, httpServer.Start()
+}
+
+// handleRootStatusRequest is only ever wired in as the server's root handler when
+// rootStatusHandler is non-nil (see startHttpServer), so it never needs to check that itself.
+func (pmaas *PMAAS) handleRootStatusRequest(w http.ResponseWriter, r *http.Request) {
+	pmaas.rootStatusHandler(w, r, pmaas.getServerStatus())
+}
+
+// getServerStatus computes a fresh ServerStatus snapshot for the root status page - see
+// IPMAASContainer.ProvideRootStatusHandler. Safe to call from any goroutine: pluginVersions and
+// startTime never change after NewPMAAS, and readLoadAverage/readMemoryStats each read live
+// process/system state independently, with no shared state of their own to guard.
+func (pmaas *PMAAS) getServerStatus() spi.ServerStatus {
+	return spi.ServerStatus{
+		Uptime:      time.Since(pmaas.startTime),
+		Plugins:     pmaas.pluginVersions,
+		LoadAverage: readLoadAverage(),
+		Memory:      readMemoryStats(),
+	}
 }
 
 func stopHttpServer(httpServer *pmaashttp.HttpServer) {
@@ -664,6 +700,21 @@ func (pmaas *PMAAS) provideTLSCertificate(
 	}
 
 	pmaas.tlsCertificateProvider = getCertificateFunc
+
+	return nil
+}
+
+func (pmaas *PMAAS) provideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc) error {
+	if pmaas.rootStatusHandler != nil {
+		return errors.New("a root status handler has already been registered by another plugin")
+	}
+
+	pmaas.rootStatusHandler = handlerFunc
+
+	// Prepended, not appended, so the status page reliably ends up first in the nav menu - the
+	// natural "home" position - regardless of which plugin happens to register it, or when
+	// during plugin initialization that happens relative to every other plugin's own routes.
+	pmaas.menuEntries = append([]*spi.MenuEntry{{Path: "/", Label: "Status"}}, pmaas.menuEntries...)
 
 	return nil
 }

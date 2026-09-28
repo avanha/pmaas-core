@@ -215,3 +215,7 @@ func (ca *containerAdapter) ProvideTLSCertificate(
 	getCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
 	return ca.pmaas.provideTLSCertificate(getCertificateFunc)
 }
+
+func (ca *containerAdapter) ProvideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc) error {
+	return ca.pmaas.provideRootStatusHandler(handlerFunc)
+}
