@@ -57,6 +57,24 @@ func moduleVersion(buildInfo *debug.BuildInfo, pluginType reflect.Type) string {
 	return ""
 }
 
+// assemblyInfo derives the running assembly's display name/version from buildInfo's main
+// module (the module of the assembly's own main package, e.g. pmaas-assembly-demo) - name is
+// the last path segment of the main module's path, version is its Version (see
+// spi.PluginVersion.Version for what that value can look like). Returns "", "" if buildInfo is
+// nil (no embedded build info at all).
+func assemblyInfo(buildInfo *debug.BuildInfo) (name string, version string) {
+	if buildInfo == nil {
+		return "", ""
+	}
+
+	name = buildInfo.Main.Path
+	if idx := strings.LastIndex(name, "/"); idx >= 0 {
+		name = name[idx+1:]
+	}
+
+	return name, buildInfo.Main.Version
+}
+
 // readLoadAverage returns the host system's 1/5/15-minute load average by reading
 // /proc/loadavg, or nil if that's not available - anywhere other than Linux (this project's
 // actual deployment target), or if the file is unreadable/malformed for any reason. There's no

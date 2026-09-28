@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os/signal"
 	"reflect"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -59,12 +60,15 @@ type PMAAS struct {
 	// Init or Start, under the same timing/locking reasoning as tlsCertificateProvider above.
 	rootStatusHandler spi.RootStatusHandlerFunc
 
-	// startTime/pluginVersions back getServerStatus's ServerStatus.Uptime/Plugins. startTime is
-	// set once, in NewPMAAS, and pluginVersions is resolved once, right after instance.plugins
-	// is populated - neither ever changes afterward, so getServerStatus can read them from any
-	// goroutine without locking.
-	startTime      time.Time
-	pluginVersions []spi.PluginVersion
+	// startTime/pluginVersions/assemblyName/assemblyVersion back getServerStatus's
+	// ServerStatus.Uptime/Plugins/AssemblyName/AssemblyVersion. startTime is set once, in
+	// NewPMAAS, and the rest are resolved once, right after instance.plugins is populated -
+	// none of them ever change afterward, so getServerStatus can read them from any goroutine
+	// without locking.
+	startTime       time.Time
+	pluginVersions  []spi.PluginVersion
+	assemblyName    string
+	assemblyVersion string
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -80,6 +84,8 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
 	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, config.Plugins())
 	instance.pluginVersions = collectPluginVersions(instance.plugins)
+	buildInfo, _ := debug.ReadBuildInfo()
+	instance.assemblyName, instance.assemblyVersion = assemblyInfo(buildInfo)
 
 	// Create a channel and close it right away.  Plugins can use this to avoid the repetition and overhead of
 	// creating and closing a channel.
@@ -312,10 +318,12 @@ func (pmaas *PMAAS) handleRootStatusRequest(w http.ResponseWriter, r *http.Reque
 // process/system state independently, with no shared state of their own to guard.
 func (pmaas *PMAAS) getServerStatus() spi.ServerStatus {
 	return spi.ServerStatus{
-		Uptime:      time.Since(pmaas.startTime),
-		Plugins:     pmaas.pluginVersions,
-		LoadAverage: readLoadAverage(),
-		Memory:      readMemoryStats(),
+		Uptime:          time.Since(pmaas.startTime),
+		AssemblyName:    pmaas.assemblyName,
+		AssemblyVersion: pmaas.assemblyVersion,
+		Plugins:         pmaas.pluginVersions,
+		LoadAverage:     readLoadAverage(),
+		Memory:          readMemoryStats(),
 	}
 }
 
