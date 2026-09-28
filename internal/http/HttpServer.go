@@ -10,7 +10,6 @@ import (
 	"net/http"
 
 	"github.com/avanha/pmaas-core/internal/plugins"
-	"github.com/avanha/pmaas-spi"
 )
 
 var XsrfValidationStatus = "xsrf-validation-status"
@@ -95,7 +94,7 @@ func (hs *HttpServer) Stop(ctx context.Context) error {
 }
 
 func (hs *HttpServer) configurePluginStaticContentDir(plugin *plugins.PluginWrapper, serveMux *http.ServeMux) {
-	pluginPath := spi.PluginAssetFullPath(plugin.ShortName(), "")
+	pluginPath := plugin.AssetFullPath("")
 	pluginContentFS, staticContentDir := plugin.ContentFs()
 
 	if pluginContentFS == nil {

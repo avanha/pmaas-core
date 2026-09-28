@@ -406,11 +406,11 @@ func (pmaas *PMAAS) getTemplate(
 	updatedStyles := make([]string, len(templateInfo.Styles))
 
 	for i, script := range templateInfo.Scripts {
-		updatedScripts[i] = spi.PluginAssetFullPath(sourcePlugin.ShortName(), script)
+		updatedScripts[i] = sourcePlugin.AssetFullPath(script)
 	}
 
 	for i, style := range templateInfo.Styles {
-		updatedStyles[i] = spi.PluginAssetFullPath(sourcePlugin.ShortName(), style)
+		updatedStyles[i] = sourcePlugin.AssetFullPath(style)
 	}
 
 	updatedTemplateInfo := spi.TemplateInfo{

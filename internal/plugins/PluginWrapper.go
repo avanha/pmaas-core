@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"reflect"
+	"strings"
 
 	"github.com/avanha/pmaas-common/mailbox"
 	"github.com/avanha/pmaas-core/config"
@@ -84,6 +85,14 @@ func (w *PluginWrapper) StopPluginRunner() {
 // asset URLs.
 func (w *PluginWrapper) ShortName() string {
 	return w.Instance.ShortName()
+}
+
+func (w *PluginWrapper) RouteFullPath(relativePath string) string {
+	return spi.PluginRoutePrefix + w.Instance.ShortName() + "/" + strings.TrimPrefix(relativePath, "/")
+}
+
+func (w *PluginWrapper) AssetFullPath(relativePath string) string {
+	return spi.PluginAssetPrefix + w.Instance.ShortName() + "/" + strings.TrimPrefix(relativePath, "/")
 }
 
 func (w *PluginWrapper) PluginPath() string {

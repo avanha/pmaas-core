@@ -24,6 +24,14 @@ type containerAdapter struct {
 // Force implementation of IPMAASContainer
 var _ spi.IPMAASContainer = (*containerAdapter)(nil)
 
+func (ca *containerAdapter) RouteFullPath(relativePath string) string {
+	return ca.target.RouteFullPath(relativePath)
+}
+
+func (ca *containerAdapter) AssetFullPath(relativePath string) string {
+	return ca.target.AssetFullPath(relativePath)
+}
+
 func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) {
 	ca.AddRouteWithOptions(
 		path,
@@ -33,12 +41,12 @@ func (ca *containerAdapter) AddRoute(path string, handlerFunc http.HandlerFunc) 
 		})
 }
 
-// AddRouteWithOptions namespaces path under this plugin's own "/plugins/<ShortName>/" prefix (see
+// AddRouteWithOptions namespaced path under this plugin's own "/plugins/<ShortName>/" prefix (see
 // spi.PluginFullPath) and, based on options, records it in the server's navigation menu registry.
 func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.HandlerFunc,
 	options *spi.HttpHandlerOptions) {
 	pluginShortName := ca.target.ShortName()
-	fullPath := spi.PluginFullPath(pluginShortName, path)
+	fullPath := ca.target.RouteFullPath(path)
 
 	registration := plugins.HttpHandlerRegistration{
 		Pattern:                fullPath,
@@ -50,14 +58,6 @@ func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.Ha
 	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
 
 	ca.pmaas.registerMenuRoute(pluginShortName, fullPath, path, options)
-}
-
-func (ca *containerAdapter) RouteFullPath(relativePath string) string {
-	return spi.PluginFullPath(ca.target.ShortName(), relativePath)
-}
-
-func (ca *containerAdapter) AssetFullPath(relativePath string) string {
-	return spi.PluginAssetFullPath(ca.target.ShortName(), relativePath)
 }
 
 func (ca *containerAdapter) AddJsonRoute(
@@ -184,16 +184,16 @@ func (ca *containerAdapter) EnqueueOnServerGoRoutine(f []func()) error {
 	return ca.pmaas.enqueueOnServerGoRoutine(f)
 }
 
-func (cs *containerAdapter) GetEntities(
+func (ca *containerAdapter) GetEntities(
 	predicate func(info *entity.RegisteredEntityInfo) bool) ([]entity.RegisteredEntityInfo, error) {
-	return cs.pmaas.getEntities(predicate)
+	return ca.pmaas.getEntities(predicate)
 }
 
 func (ca *containerAdapter) AssertEntityType(pmaasEntityId string, entityType reflect.Type) error {
 	return ca.pmaas.assertEntityType(pmaasEntityId, entityType)
 }
 
-func (ca *containerAdapter) InvokeOnEntity(entityId string, function func(entity any)) error {
+func (ca *containerAdapter) InvokeOnEntity(_ string, _ func(entity any)) error {
 	//return ca.pmaas.invokeOnEntity(entityId, function)
 	panic("not implemented")
 }
