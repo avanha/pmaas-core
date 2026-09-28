@@ -152,6 +152,7 @@ func run(httpServer *http.Server, doneCh chan error) {
 
 	var err error
 	var functionName string
+
 	if httpServer.TLSConfig == nil {
 		functionName = "ListenAndServe"
 		err = httpServer.ListenAndServe()
