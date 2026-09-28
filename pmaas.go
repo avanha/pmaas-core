@@ -3,6 +3,7 @@ package core
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,6 +48,12 @@ type PMAAS struct {
 	// any goroutine without locking.
 	menuEntries            []*spi.MenuEntry
 	menuEntriesByShortName map[string]*spi.MenuEntry
+
+	// tlsCertificateProvider is set by at most one plugin's ProvideTLSCertificate call, during Init
+	// or Start - i.e. before startHttpServer ever reads it, since that only happens after every
+	// plugin has finished starting (see internalRun). Like menuEntries, it's only ever written while
+	// plugins are being initialized/started sequentially, so no locking is needed here.
+	tlsCertificateProvider func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -268,6 +275,10 @@ func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
 func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
 	httpServer := pmaashttp.NewHttpServer(pmaas.config.HttpPort)
 	httpServer.RegisterPluginHandlers(pmaas.plugins)
+
+	if pmaas.tlsCertificateProvider != nil {
+		httpServer.SetTLSCertificateProvider(pmaas.tlsCertificateProvider)
+	}
 
 	return httpServer, httpServer.Start()
 }
@@ -644,6 +655,17 @@ func (pmaas *PMAAS) saveConfig(pluginType reflect.Type, config any) error {
 
 func (pmaas *PMAAS) enqueueOnServerGoRoutine(callbacks []func()) error {
 	return pmaas.dispatcher.Dispatch(callbacks)
+}
+
+func (pmaas *PMAAS) provideTLSCertificate(
+	getCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
+	if pmaas.tlsCertificateProvider != nil {
+		return errors.New("a TLS certificate provider has already been registered by another plugin")
+	}
+
+	pmaas.tlsCertificateProvider = getCertificateFunc
+
+	return nil
 }
 
 func genericEntityRenderer(entity any) (string, error) {

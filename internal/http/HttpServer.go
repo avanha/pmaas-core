@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"crypto/subtle"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,6 +20,7 @@ type HttpServer struct {
 	port           int
 	serverInstance *http.Server
 	runDoneCh      chan error
+	getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)
 }
 
 func NewHttpServer(port int) *HttpServer {
@@ -52,10 +54,21 @@ func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 	}
 }
 
+// SetTLSCertificateProvider configures the server to terminate TLS, using getCertificate (Go's own
+// tls.Config.GetCertificate shape) to obtain a certificate for every handshake. Must be called before
+// Start. If never called, Start serves plain HTTP, exactly as before this method existed.
+func (hs *HttpServer) SetTLSCertificateProvider(getCertificate func(*tls.ClientHelloInfo) (*tls.Certificate, error)) {
+	hs.getCertificate = getCertificate
+}
+
 func (hs *HttpServer) Start() error {
 	hs.serverInstance = &http.Server{
 		Addr:    fmt.Sprintf(":%d", hs.port),
 		Handler: hs.mux,
+	}
+
+	if hs.getCertificate != nil {
+		hs.serverInstance.TLSConfig = &tls.Config{GetCertificate: hs.getCertificate}
 	}
 
 	doneCh := make(chan error)
@@ -135,7 +148,15 @@ func (hs *HttpServer) configurePluginStaticContentDir(plugin *plugins.PluginWrap
 func run(httpServer *http.Server, doneCh chan error) {
 	fmt.Printf("HttpServer: run() start\n")
 	defer func() { close(doneCh) }()
-	var err = httpServer.ListenAndServe()
+
+	var err error
+	if httpServer.TLSConfig != nil {
+		// Both filenames are empty because the certificate is served entirely via
+		// TLSConfig.GetCertificate (see SetTLSCertificateProvider), never from files on disk.
+		err = httpServer.ListenAndServeTLS("", "")
+	} else {
+		err = httpServer.ListenAndServe()
+	}
 
 	if err == nil || err == http.ErrServerClosed {
 		fmt.Printf("HttpServer: run() ListenAndServe completed\n")

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io/fs"
@@ -208,4 +209,9 @@ func (ca *containerAdapter) LoadConfig(targetFactoryFunc func(string) any) (any,
 
 func (ca *containerAdapter) SaveConfig(config any) error {
 	return ca.pmaas.saveConfig(ca.target.PluginType, config)
+}
+
+func (ca *containerAdapter) ProvideTLSCertificate(
+	getCertificateFunc func(*tls.ClientHelloInfo) (*tls.Certificate, error)) error {
+	return ca.pmaas.provideTLSCertificate(getCertificateFunc)
 }
