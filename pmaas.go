@@ -60,15 +60,16 @@ type PMAAS struct {
 	// Init or Start, under the same timing/locking reasoning as tlsCertificateProvider above.
 	rootStatusHandler spi.RootStatusHandlerFunc
 
-	// startTime/pluginVersions/assemblyName/assemblyVersion back getServerStatus's
-	// ServerStatus.Uptime/Plugins/AssemblyName/AssemblyVersion. startTime is set once, in
-	// NewPMAAS, and the rest are resolved once, right after instance.plugins is populated -
-	// none of them ever change afterward, so getServerStatus can read them from any goroutine
-	// without locking.
-	startTime       time.Time
-	pluginVersions  []spi.PluginVersion
-	assemblyName    string
-	assemblyVersion string
+	// startTime/pluginVersions/assemblyName/assemblyVersion/assemblyCommitTime back
+	// getServerStatus's ServerStatus.Uptime/Plugins/AssemblyName/AssemblyVersion/CommitTime.
+	// startTime is set once, in NewPMAAS, and the rest are resolved once, right after
+	// instance.plugins is populated - none of them ever change afterward, so getServerStatus
+	// can read them from any goroutine without locking.
+	startTime          time.Time
+	pluginVersions     []spi.PluginVersion
+	assemblyName       string
+	assemblyVersion    string
+	assemblyCommitTime time.Time
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
@@ -86,6 +87,7 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	instance.pluginVersions = collectPluginVersions(instance.plugins)
 	buildInfo, _ := debug.ReadBuildInfo()
 	instance.assemblyName, instance.assemblyVersion = assemblyInfo(buildInfo)
+	instance.assemblyCommitTime = commitTime(buildInfo)
 
 	// Create a channel and close it right away.  Plugins can use this to avoid the repetition and overhead of
 	// creating and closing a channel.
@@ -321,6 +323,7 @@ func (pmaas *PMAAS) getServerStatus() spi.ServerStatus {
 		Uptime:          time.Since(pmaas.startTime),
 		AssemblyName:    pmaas.assemblyName,
 		AssemblyVersion: pmaas.assemblyVersion,
+		CommitTime:      pmaas.assemblyCommitTime,
 		Plugins:         pmaas.pluginVersions,
 		LoadAverage:     readLoadAverage(),
 		Memory:          readMemoryStats(),
@@ -580,7 +583,7 @@ func (pmaas *PMAAS) registerEntity(
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
-		fmt.Printf("Unable to broadcast %s: %v", event, err)
+		fmt.Printf("Unable to broadcast %v: %v", event, err)
 	}
 
 	return id, nil
@@ -603,7 +606,7 @@ func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWrapper, id string) error 
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
-		fmt.Printf("Unable to broadcast %s: %v", event, err)
+		fmt.Printf("Unable to broadcast %v: %v", event, err)
 	}
 
 	return nil

@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-spi"
@@ -73,6 +74,31 @@ func assemblyInfo(buildInfo *debug.BuildInfo) (name string, version string) {
 	}
 
 	return name, buildInfo.Main.Version
+}
+
+// commitTime extracts the running build's embedded git commit timestamp from buildInfo's VCS
+// build settings ("vcs.time" - RFC 3339, always UTC per the Go toolchain's own stamping), or
+// the zero time.Time if buildInfo is nil, VCS stamping wasn't available (e.g. built outside a
+// git checkout), or the value is somehow unparseable. This is the commit's time, not the time
+// `go build` itself was actually run - the toolchain doesn't record that anywhere.
+func commitTime(buildInfo *debug.BuildInfo) time.Time {
+	if buildInfo == nil {
+		return time.Time{}
+	}
+
+	for _, setting := range buildInfo.Settings {
+		if setting.Key != "vcs.time" {
+			continue
+		}
+
+		parsed, err := time.Parse(time.RFC3339, setting.Value)
+		if err != nil {
+			return time.Time{}
+		}
+		return parsed
+	}
+
+	return time.Time{}
 }
 
 // readLoadAverage returns the host system's 1/5/15-minute load average by reading
