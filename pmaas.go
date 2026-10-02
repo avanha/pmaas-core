@@ -556,21 +556,27 @@ func (pmaas *PMAAS) registerEntity(
 	id := fmt.Sprintf("%s_%s_%s", sourcePlugin.PluginType.PkgPath(), sourcePlugin.PluginType.Name(), uniqueData)
 	id = strings.ReplaceAll(id, " ", "_")
 
-	wrappedStubFactory := func() (any, error) {
-		resultCh := make(chan stubFactoryResult)
-		err := sourcePlugin.ExecInternal(func() {
-			stub, factoryErr := stubFactoryFn()
-			resultCh <- stubFactoryResult{stub: stub, err: factoryErr}
-			close(resultCh)
-		})
+	// A nil stubFactoryFn means the entity has no stub; keep the wrapper nil too, so consumers'
+	// "StubFactoryFn != nil" checks work instead of hitting a nil call on the plugin goroutine.
+	var wrappedStubFactory spi.EntityStubFactoryFunc
 
-		if err != nil {
-			return nil, fmt.Errorf("stub creation failed, unable to execute stubFactory on plugin goroutine: %v", err)
+	if stubFactoryFn != nil {
+		wrappedStubFactory = func() (any, error) {
+			resultCh := make(chan stubFactoryResult)
+			err := sourcePlugin.ExecInternal(func() {
+				stub, factoryErr := stubFactoryFn()
+				resultCh <- stubFactoryResult{stub: stub, err: factoryErr}
+				close(resultCh)
+			})
+
+			if err != nil {
+				return nil, fmt.Errorf("stub creation failed, unable to execute stubFactory on plugin goroutine: %v", err)
+			}
+
+			result := <-resultCh
+
+			return result.stub, result.err
 		}
-
-		result := <-resultCh
-
-		return result.stub, result.err
 	}
 
 	err := pmaas.entityManager.AddEntity(id, entityType, wrappedStubFactory)
