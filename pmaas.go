@@ -265,8 +265,11 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	stopPlugins(pmaas.plugins)
 
 	fmt.Printf("pmaas.Run: Stopping core services...\n")
-	stopEntityManager(pmaas.entityManager)
-	stopEventManager(pmaas.eventManager)
+
+	// No timeouts here, unlike the HTTP server above. The HTTP server waits on clients we don't control;
+	// these are our own code, so if either never returns, that's a bug to find, not to wait out.
+	pmaas.entityManager.Stop()
+	pmaas.eventManager.Stop()
 
 	fmt.Printf("pmaas.Run: End\n")
 
@@ -337,26 +340,6 @@ func stopHttpServer(httpServer *pmaashttp.HttpServer) {
 
 	if err != nil {
 		fmt.Printf("Error stopping HttpServer: %v", err)
-	}
-}
-
-func stopEntityManager(entityManager *entitymanager.EntityManager) {
-	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
-	defer cancelFn()
-	err := entityManager.Stop(ctx)
-
-	if err != nil {
-		fmt.Printf("Error stopping EntityManager: %v\n", err)
-	}
-}
-
-func stopEventManager(eventManager *eventmanager.EventManager) {
-	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
-	defer cancelFn()
-	err := eventManager.Stop(ctx)
-
-	if err != nil {
-		fmt.Printf("Error stopping EventManager: %v\n", err)
 	}
 }
 

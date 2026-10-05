@@ -1,7 +1,6 @@
 package eventmanager
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -69,46 +68,35 @@ func (em *EventManager) Start() error {
 	return nil
 }
 
-func (em *EventManager) Stop(ctx context.Context) error {
+// Stop shuts the manager down and returns once every event already accepted has been delivered and
+// the dispatcher has exited. Only the first call does anything; a repeat call returns immediately.
+//
+// There is deliberately no timeout. The manager is our own code, so if this never returns, something
+// is wrong that needs finding, not waiting out. The usual cause is an event receiver that never
+// returns, since dispatch is serialized and waits on each receiver in turn.
+func (em *EventManager) Stop() {
 	if em.mailbox == nil {
-		return nil
+		return
 	}
 
 	// Safe to call multiple times; only the first call does anything.
 	if !em.stopped.CompareAndSwap(false, true) {
-		fmt.Printf("Event manager already stoppingx\n")
-		return nil
+		fmt.Printf("Event manager already stopping\n")
+		return
 	}
 
 	fmt.Printf("Event manager stopping\n")
 
-	// Run the full shutdown sequence (mailbox stop, dispatch channel close, dispatch
-	// drain) to completion in a background goroutine, regardless of whether the
-	// caller's context expires while waiting.  This ensures that a context timeout
-	// only affects whether Stop blocks the caller; it never leaves the shutdown
-	// half-finished or leaks the dispatcher goroutine.
-	stoppedCh := make(chan struct{})
-	go func() {
-		em.mailbox.Stop()
+	// Stop the mailbox first, which guarantees nothing more can be queued for dispatch, then close
+	// the dispatch channel, which lets the dispatcher drain what's left and exit.
+	em.mailbox.Stop()
+	em.dispatchEventCh.Close()
 
-		// Signal the dispatcher GoRoutine to stop and wait for it to terminate
-		em.dispatchEventCh.Close()
-		dispatchErr := <-em.dispatchDoneCh
-
-		if dispatchErr != nil {
-			fmt.Printf("EventManager terminated with error: %v\n", dispatchErr)
-		}
-
-		close(stoppedCh)
-		fmt.Printf("Event manager stopped\n")
-	}()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("error stopping EventManager, context done signal received while waiting for termination: %v", ctx.Err())
-	case <-stoppedCh:
-		return nil
+	if dispatchErr := <-em.dispatchDoneCh; dispatchErr != nil {
+		fmt.Printf("EventManager terminated with error: %v\n", dispatchErr)
 	}
+
+	fmt.Printf("Event manager stopped\n")
 }
 
 func (em *EventManager) BroadcastEvent(sourcePluginType reflect.Type, sourceEntityId string, event any) error {

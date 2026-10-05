@@ -1,7 +1,6 @@
 package entitymanager
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"reflect"
@@ -70,30 +69,19 @@ func (em *EntityManager) Start() error {
 	return nil
 }
 
-func (em *EntityManager) Stop(ctx context.Context) error {
+// Stop stops accepting requests and returns once the manager's goroutine has finished. Safe to call
+// more than once.
+//
+// There is deliberately no timeout. The manager is our own code, so if this never returns, something
+// is wrong that needs finding, not waiting out.
+func (em *EntityManager) Stop() {
 	if em.mailbox == nil {
-		return nil
+		return
 	}
 
 	fmt.Printf("EntityManager stopping\n")
-
-	// Run the stop to completion in a background goroutine regardless of whether the caller's context
-	// expires while waiting, so a context timeout only affects whether Stop blocks the caller — it
-	// never leaves the mailbox half-stopped. Mailbox.Stop is itself safe to call more than once, so no
-	// extra guard is needed here for a repeat Stop call.
-	stoppedCh := make(chan struct{})
-	go func() {
-		em.mailbox.Stop()
-		close(stoppedCh)
-		fmt.Printf("EntityManager stopped\n")
-	}()
-
-	select {
-	case <-ctx.Done():
-		return fmt.Errorf("error stopping EntityManager, context done signal received while waiting for termination: %v", ctx.Err())
-	case <-stoppedCh:
-		return nil
-	}
+	em.mailbox.Stop()
+	fmt.Printf("EntityManager stopped\n")
 }
 
 func (em *EntityManager) AddEntity(
