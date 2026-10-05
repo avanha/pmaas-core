@@ -75,6 +75,8 @@ func (ca *containerAdapter) AddJsonRoute(
 				err := json.NewDecoder(r.Body).Decode(request)
 
 				if err != nil {
+					fmt.Printf("%s: %s %q: unable to parse the request body: %v\n",
+						ca.target.ShortName(), r.Method, r.URL.Path, err)
 					http.Error(w, "Failed to parse request body", http.StatusBadRequest)
 					return
 				}
@@ -83,6 +85,8 @@ func (ca *containerAdapter) AddJsonRoute(
 			jsonResponse, err := handlerFunc(w, r, request)
 
 			if err != nil {
+				// The caller gets this in the response, but whoever runs the server doesn't see responses.
+				fmt.Printf("%s: %s %q failed: %v\n", ca.target.ShortName(), r.Method, r.URL.Path, err)
 				http.Error(w, fmt.Sprintf("Failed to handle request: %v", err), http.StatusInternalServerError)
 				return
 			}

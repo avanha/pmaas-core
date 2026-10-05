@@ -276,11 +276,47 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	return err
 }
 
-// getBaseUrl picks the configured base URL matching the given request's Host header. The scheme and
-// host are always taken from configuration, never from the request itself: a request only selects
-// which pre-configured base URL applies, it never supplies the value directly.
+// baseUrls returns the base URLs the server may be addressed as: the configured ones, or, if none were
+// configured, the single localhost address the server actually listens on (see defaultBaseUrl).
+//
+// The default is worked out here, when it's wanted, rather than when the config is created, because it
+// depends on two things that aren't settled until the server starts: the final HttpPort, which an
+// assembly may change after creating its config, and whether a plugin has provided a TLS certificate,
+// which happens during plugin Init or Start. Only one scheme can be served on a port, and the
+// certificate provider is exactly what decides which (see startHttpServer), so there's no need to
+// list both.
+func (pmaas *PMAAS) baseUrls() []string {
+	if len(pmaas.config.BaseURLs) > 0 {
+		return pmaas.config.BaseURLs
+	}
+
+	return []string{defaultBaseUrl(pmaas.config.HttpPort, pmaas.tlsCertificateProvider != nil)}
+}
+
+// defaultBaseUrl is the localhost base URL for a server listening on port, serving TLS or not. The port
+// is left out when it's the scheme's default one, since that's how a client writes the Host header
+// that getBaseUrl matches against.
+func defaultBaseUrl(port int, serverUsesTls bool) string {
+	scheme, schemeDefaultPort := "http", 80
+
+	if serverUsesTls {
+		scheme, schemeDefaultPort = "https", 443
+	}
+
+	if port == schemeDefaultPort {
+		return scheme + "://localhost"
+	}
+
+	return fmt.Sprintf("%s://localhost:%d", scheme, port)
+}
+
+// getBaseUrl picks the base URL matching the given request's Host header. The scheme and host are
+// always taken from configuration, never from the request itself: a request only selects which
+// pre-configured base URL applies, it never supplies the value directly.
 func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
-	for _, baseUrl := range pmaas.config.BaseURLs {
+	baseUrls := pmaas.baseUrls()
+
+	for _, baseUrl := range baseUrls {
 		parsed, err := url.Parse(baseUrl)
 
 		if err != nil {
@@ -293,7 +329,30 @@ func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
 		}
 	}
 
+	// Nothing in the response explains this to whoever clicked, so say what's wrong here, and what to do
+	// about it: this is a configuration mistake that's easy to make (e.g. changing the HTTP port without
+	// updating the base URLs).
+	fmt.Printf("pmaas.getBaseUrl: %s\n", describeBaseUrlMismatch(r, baseUrls))
+
 	return "", fmt.Errorf("no configured base URL matches request host %q", r.Host)
+}
+
+// describeBaseUrlMismatch explains why no configured base URL matched r, and what to add to the
+// configuration to make it match. The suggested URL's scheme is a guess from how this connection
+// arrived, so it's wrong behind a proxy that terminates TLS; the host is exactly what the client used.
+// Everything that came from the request is quoted, so a hostile Host header can't forge log lines.
+func describeBaseUrlMismatch(r *http.Request, configured []string) string {
+	scheme := "http"
+
+	if r.TLS != nil {
+		scheme = "https"
+	}
+
+	return fmt.Sprintf(
+		"no configured base URL matches the request's host %q (%s %q, received over %s). "+
+			"Configured base URLs: %q. If the server is meant to be reached at this address, add %q to "+
+			"config.Config.BaseURLs (the scheme is guessed from this connection).",
+		r.Host, r.Method, r.URL.Path, scheme, configured, scheme+"://"+r.Host)
 }
 
 func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
@@ -303,6 +362,17 @@ func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
 	if pmaas.tlsCertificateProvider != nil {
 		httpServer.SetTLSCertificateProvider(pmaas.tlsCertificateProvider)
 	}
+
+	// Say what base URLs are in effect: they decide which requests can start an OAuth flow, and when they
+	// were defaulted they're otherwise invisible.
+	origin := "configured"
+
+	if len(pmaas.config.BaseURLs) == 0 {
+		origin = "defaulted from the HTTP port and whether a TLS certificate was provided; set Config.BaseURLs to override"
+	}
+
+	fmt.Printf("pmaas.Run: serving HTTP on port %d, TLS=%t, base URLs %q (%s)\n",
+		pmaas.config.HttpPort, pmaas.tlsCertificateProvider != nil, pmaas.baseUrls(), origin)
 
 	if pmaas.rootStatusHandler != nil {
 		httpServer.SetRootHandler(pmaas.handleRootStatusRequest)

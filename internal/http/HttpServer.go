@@ -226,6 +226,8 @@ func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		if suppliedRaValue != "" && subtle.ConstantTimeCompare([]byte(suppliedRaValue), []byte(currentRaValue)) != 1 {
 			// Token was supplied but does not match the current value
+			fmt.Printf("xsrf: rejecting %s %q from %s: the ra header does not match the ra-src cookie\n",
+				r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "XSRF validation failed", http.StatusForbidden)
 			return
 		}
@@ -250,6 +252,10 @@ func writeRaSrc(w http.ResponseWriter) {
 func xsrfRequiredMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Value(XsrfValidationStatus) == nil {
+			// Only reachable when the request had neither an ra-src cookie nor an ra header, i.e. the
+			// browser hasn't loaded a page from this server yet (which is what sets the cookie).
+			fmt.Printf("xsrf: rejecting %s %q from %s: no ra-src cookie was sent, so the request can't be validated\n",
+				r.Method, r.URL.Path, r.RemoteAddr)
 			http.Error(w, "XSRF validation required", http.StatusBadRequest)
 			return
 		}
