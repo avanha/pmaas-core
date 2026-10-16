@@ -157,15 +157,11 @@ func (pmaas *PMAAS) getMenu() []spi.MenuEntry {
 	return result
 }
 
-// withClock is the configured plugins with the server's own clock in front of them, so that it's registered, and
-// its stub handed to the assembly, before anything the assembly configured has started.
+// withClock is the configured plugins with the server's own clock in front of them. It has to be there, and be
+// started, before anything the assembly configured can ask for its events.
 func withClock(conf *config.Config) []config.PluginWithConfig {
-	if conf.Clock == nil {
-		conf.Clock = config.NewClock()
-	}
-
 	return append(
-		[]config.PluginWithConfig{config.NewPluginWithConfig(clock.NewPlugin(conf.Clock), config.PluginConfig{})},
+		[]config.PluginWithConfig{config.NewPluginWithConfig(clock.NewPlugin(), config.PluginConfig{})},
 		conf.Plugins()...)
 }
 

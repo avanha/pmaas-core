@@ -25,17 +25,3 @@ func TestWithClock_PutsTheServersClockFirst(t *testing.T) {
 		t.Errorf("the configuration's own plugins were changed: %d", len(conf.Plugins()))
 	}
 }
-
-func TestWithClock_MakesAClockForAConfigurationThatHasNone(t *testing.T) {
-	conf := &config.Config{}
-
-	if len(withClock(conf)) != 1 || conf.Clock == nil {
-		t.Errorf("clock: %v", conf.Clock)
-	}
-}
-
-func TestNewConfig_HasAClock(t *testing.T) {
-	if config.NewConfig().Clock == nil {
-		t.Error("no clock")
-	}
-}

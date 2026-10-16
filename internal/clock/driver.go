@@ -7,7 +7,6 @@ import (
 	"time"
 
 	spiclock "github.com/avanha/pmaas-spi/clock"
-	"github.com/avanha/pmaas-spi/events"
 )
 
 // driver turns the passing of time into events. It has no idea where time or events come from, which is what lets
@@ -18,9 +17,6 @@ type driver struct {
 
 	// wait returns after d, or at once, with false, when ctx is done.
 	wait func(ctx context.Context, d time.Duration) bool
-
-	// entity is what every event says it's from.
-	entity events.EntityEvent
 
 	// emit is where each event goes, in the order they're to be delivered.
 	emit func(event any)
@@ -80,22 +76,22 @@ func (d *driver) broadcastChanges(previous time.Time, current time.Time) {
 	sameHour := sameDay && startOfHour(previous).Equal(startOfHour(current))
 
 	if !sameYear {
-		d.emit(spiclock.YearChangedEvent{EntityEvent: d.entity, Time: current})
+		d.emit(spiclock.YearChangedEvent{Time: current})
 	}
 
 	if !sameMonth {
-		d.emit(spiclock.MonthChangedEvent{EntityEvent: d.entity, Time: current})
+		d.emit(spiclock.MonthChangedEvent{Time: current})
 	}
 
 	if !sameDay {
-		d.emit(spiclock.DayChangedEvent{EntityEvent: d.entity, Time: current})
+		d.emit(spiclock.DayChangedEvent{Time: current})
 	}
 
 	if !sameHour {
-		d.emit(spiclock.HourChangedEvent{EntityEvent: d.entity, Time: current})
+		d.emit(spiclock.HourChangedEvent{Time: current})
 	}
 
-	d.emit(spiclock.MinuteChangedEvent{EntityEvent: d.entity, Time: current})
+	d.emit(spiclock.MinuteChangedEvent{Time: current})
 }
 
 // waitFor is the real wait: a timer, ended early by ctx.
