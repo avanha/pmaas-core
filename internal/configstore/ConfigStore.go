@@ -128,5 +128,5 @@ func storeDir() string {
 		panic(fmt.Errorf("Unable to obtain config dir: %w\n", err))
 	}
 
-	return filepath.Join(dir, "dir", "PMAAS")
+	return filepath.Join(dir, "PMAAS")
 }
