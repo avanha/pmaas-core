@@ -20,6 +20,10 @@ type Config struct {
 	// explicitly for any other hostname the server is reached by.
 	BaseURLs []string
 
+	// Clock is the server's clock, which broadcasts an event as each minute, hour, day, month and year changes
+	// once it's started. See Clock.
+	Clock *Clock
+
 	plugins []PluginWithConfig
 }
 
@@ -27,6 +31,7 @@ func NewConfig() *Config {
 	return &Config{
 		ContentPathRoot: "/var/pmaas/content",
 		HttpPort:        8090,
+		Clock:           NewClock(),
 		plugins:         make([]PluginWithConfig, 0),
 	}
 }

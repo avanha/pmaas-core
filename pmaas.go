@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/avanha/pmaas-core/config"
+	"github.com/avanha/pmaas-core/internal/clock"
 	"github.com/avanha/pmaas-core/internal/configstore"
 	"github.com/avanha/pmaas-core/internal/dispatcher"
 	"github.com/avanha/pmaas-core/internal/entitymanager"
@@ -83,7 +84,7 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	}
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
-	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, config.Plugins())
+	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, withClock(config))
 	instance.pluginVersions = collectPluginVersions(instance.plugins)
 	buildInfo, _ := debug.ReadBuildInfo()
 	instance.assemblyName, instance.assemblyVersion = assemblyInfo(buildInfo)
@@ -154,6 +155,18 @@ func (pmaas *PMAAS) getMenu() []spi.MenuEntry {
 	}
 
 	return result
+}
+
+// withClock is the configured plugins with the server's own clock in front of them, so that it's registered, and
+// its stub handed to the assembly, before anything the assembly configured has started.
+func withClock(conf *config.Config) []config.PluginWithConfig {
+	if conf.Clock == nil {
+		conf.Clock = config.NewClock()
+	}
+
+	return append(
+		[]config.PluginWithConfig{config.NewPluginWithConfig(clock.NewPlugin(conf.Clock), config.PluginConfig{})},
+		conf.Plugins()...)
 }
 
 func createPluginWrappers(pmaasServerAdapter pmaasserver.PmaasServer, configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
