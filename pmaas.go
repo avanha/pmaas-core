@@ -268,8 +268,13 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 
 	// No timeouts here, unlike the HTTP server above. The HTTP server waits on clients we don't control;
 	// these are our own code, so if either never returns, that's a bug to find, not to wait out.
+	done := watchShutdownStep("the entity manager")
 	pmaas.entityManager.Stop()
+	done()
+
+	done = watchShutdownStep("the event manager")
 	pmaas.eventManager.Stop()
+	done()
 
 	fmt.Printf("pmaas.Run: End\n")
 
@@ -418,9 +423,14 @@ func stopPlugins(plugins []*plugins.PluginWrapper) {
 		plugin := plugins[i]
 		startTime := time.Now()
 		if plugin.Running {
+			done := watchShutdownStep(fmt.Sprintf("plugin %T", plugin.Instance))
 			stopPlugin(plugin)
+			done()
 		}
+
+		stopped := watchShutdownStep(fmt.Sprintf("the runner of plugin %T", plugin.Instance))
 		plugin.StopPluginRunner()
+		stopped()
 		stopDuration := time.Now().Sub(startTime)
 		fmt.Printf("PMAAS Stopped %T in %v\n", plugin.Instance, stopDuration)
 	}
