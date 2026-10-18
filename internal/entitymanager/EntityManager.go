@@ -3,6 +3,7 @@ package entitymanager
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 
 	"github.com/avanha/pmaas-common/mailbox"
@@ -53,18 +54,20 @@ type findEntitiesResponse struct {
 // (signal, then wait for every in-flight Send to finish, only then close the underlying channel) exists
 // to prevent.
 type EntityManager struct {
+	log      *slog.Logger
 	mailbox  *mailbox.Mailbox
 	entities map[string]entityRecord
 }
 
-func NewEntityManager() *EntityManager {
+func NewEntityManager(log *slog.Logger) *EntityManager {
 	return &EntityManager{
+		log:      log,
 		entities: make(map[string]entityRecord),
 	}
 }
 
 func (em *EntityManager) Start() error {
-	fmt.Printf("EntityManager starting\n")
+	em.log.Info("starting")
 	em.mailbox = mailbox.NewMailbox()
 	return nil
 }
@@ -79,9 +82,9 @@ func (em *EntityManager) Stop() {
 		return
 	}
 
-	fmt.Printf("EntityManager stopping\n")
+	em.log.Info("stopping")
 	em.mailbox.Stop()
-	fmt.Printf("EntityManager stopped\n")
+	em.log.Info("stopped")
 }
 
 func (em *EntityManager) AddEntity(

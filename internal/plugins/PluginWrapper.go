@@ -3,6 +3,7 @@ package plugins
 import (
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"reflect"
 	"strings"
@@ -24,12 +25,15 @@ type PluginWrapper struct {
 	PluginType       reflect.Type
 	Running          bool
 
+	log *slog.Logger
+
 	// The "mailbox" for the plugin (actor0
 	mailbox *mailbox.Mailbox
 }
 
-func NewPluginWrapper(server pmaasserver.PmaasServer, pluginWithConfig config.PluginWithConfig) *PluginWrapper {
+func NewPluginWrapper(log *slog.Logger, server pmaasserver.PmaasServer, pluginWithConfig config.PluginWithConfig) *PluginWrapper {
 	return &PluginWrapper{
+		log:             log,
 		server:          server,
 		Config:          &pluginWithConfig.Config,
 		Instance:        pluginWithConfig.Instance,
@@ -66,7 +70,7 @@ func (w *PluginWrapper) ExecInternal(target func()) error {
 }
 
 func (w *PluginWrapper) StartPluginRunner() {
-	fmt.Printf("%T plugin runner START\n", w.Instance)
+	w.log.Debug("plugin runner start", "plugin", fmt.Sprintf("%T", w.Instance))
 	w.mailbox = mailbox.NewMailbox()
 }
 
@@ -76,7 +80,7 @@ func (w *PluginWrapper) StopPluginRunner() {
 	}
 
 	w.mailbox.Stop()
-	fmt.Printf("%T plugin runner STOP\n", w.Instance)
+	w.log.Debug("plugin runner stop", "plugin", fmt.Sprintf("%T", w.Instance))
 }
 
 // ShortName returns the plugin's own stable identifier, used to namespace its routes under

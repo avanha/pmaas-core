@@ -1,6 +1,7 @@
 package eventmanager_test
 
 import (
+	"log/slog"
 	"reflect"
 	"testing"
 	"time"
@@ -12,13 +13,13 @@ import (
 )
 
 func newTestPluginWrapper() *plugins.PluginWrapper {
-	pw := plugins.NewPluginWrapper(nil, config.PluginWithConfig{})
+	pw := plugins.NewPluginWrapper(testLog, nil, config.PluginWithConfig{})
 	pw.StartPluginRunner()
 	return pw
 }
 
 func TestEventManager_AddReceiver_BroadcastEvent_RemoveReceiver(t *testing.T) {
-	em := eventmanager.NewEventManager()
+	em := eventmanager.NewEventManager(testLog)
 
 	if err := em.Start(); err != nil {
 		t.Fatalf("unexpected error starting EventManager: %v", err)
@@ -72,7 +73,7 @@ func TestEventManager_AddReceiver_BroadcastEvent_RemoveReceiver(t *testing.T) {
 }
 
 func TestEventManager_RemoveReceiver_UnknownHandle(t *testing.T) {
-	em := eventmanager.NewEventManager()
+	em := eventmanager.NewEventManager(testLog)
 
 	if err := em.Start(); err != nil {
 		t.Fatalf("unexpected error starting EventManager: %v", err)
@@ -87,7 +88,7 @@ func TestEventManager_RemoveReceiver_UnknownHandle(t *testing.T) {
 }
 
 func TestEventManager_Stop_RejectsFurtherRequests(t *testing.T) {
-	em := eventmanager.NewEventManager()
+	em := eventmanager.NewEventManager(testLog)
 
 	if err := em.Start(); err != nil {
 		t.Fatalf("unexpected error starting EventManager: %v", err)
@@ -112,7 +113,7 @@ func TestEventManager_Stop_RejectsFurtherRequests(t *testing.T) {
 }
 
 func TestEventManager_Stop_IsIdempotent(t *testing.T) {
-	em := eventmanager.NewEventManager()
+	em := eventmanager.NewEventManager(testLog)
 
 	if err := em.Start(); err != nil {
 		t.Fatalf("unexpected error starting EventManager: %v", err)
@@ -138,7 +139,7 @@ func TestEventManager_Stop_IsIdempotent(t *testing.T) {
 // deliberate, a receiver that never returns is a bug to be found rather than waited out, and a
 // timeout would only hide it.
 func TestEventManager_Stop_WaitsForAnInFlightReceiver(t *testing.T) {
-	em := eventmanager.NewEventManager()
+	em := eventmanager.NewEventManager(testLog)
 
 	if err := em.Start(); err != nil {
 		t.Fatalf("unexpected error starting EventManager: %v", err)
@@ -196,3 +197,5 @@ func TestEventManager_Stop_WaitsForAnInFlightReceiver(t *testing.T) {
 		t.Fatalf("expected error broadcasting event after stop, got nil")
 	}
 }
+
+var testLog = slog.New(slog.DiscardHandler)

@@ -3,18 +3,21 @@ package dispatcher
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 )
 
 type Dispatcher struct {
+	log               *slog.Logger
 	rwLock            sync.RWMutex
 	running           bool
 	callbackCh        chan func()
 	callbackChWriters sync.WaitGroup
 }
 
-func NewDispatcher() *Dispatcher {
+func NewDispatcher(log *slog.Logger) *Dispatcher {
 	return &Dispatcher{
+		log:        log,
 		callbackCh: make(chan func(), 50),
 		// callbackChWriters is zero-initialized and ready to use
 	}
@@ -41,7 +44,7 @@ func (d *Dispatcher) Dispatch(callbacks []func()) error {
 }
 
 func (d *Dispatcher) Run(ctx context.Context) {
-	fmt.Println("PMAAS.Dispatcher: Start")
+	d.log.Info("starting")
 	// Mark the dispatcher as running
 	d.rwLock.Lock()
 	d.running = true
@@ -59,7 +62,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		}
 	}
 
-	fmt.Println("PMAAS.Dispatcher: Stopping ingress...")
+	d.log.Debug("stopping ingress")
 
 	// Mark the dispatcher as not running and close the callback channel
 	d.rwLock.Lock()
@@ -75,7 +78,7 @@ func (d *Dispatcher) Run(ctx context.Context) {
 	}()
 
 	// Continue processing callbacks until the channel is drained.
-	fmt.Println("PMAAS.Dispatcher: Dispatching remaining callbacks...")
+	d.log.Debug("dispatching remaining callbacks")
 	dispatchCount := 0
 
 	for callback := range d.callbackCh {
@@ -83,13 +86,13 @@ func (d *Dispatcher) Run(ctx context.Context) {
 		dispatchCount++
 	}
 
-	fmt.Printf("PMAAS.Dispatcher: Stopped, dispatched %d remaining callback(s)\n", dispatchCount)
+	d.log.Info("stopped", "remainingCallbacks", dispatchCount)
 }
 
 func (d *Dispatcher) executeCallback(callback func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			fmt.Printf("Dispatcher: panic in callback: %v\n", r)
+			d.log.Error("panic in callback", "panic", r)
 		}
 	}()
 

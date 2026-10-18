@@ -3,6 +3,7 @@ package eventmanager
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 	"reflect"
 	"sync/atomic"
 
@@ -37,6 +38,7 @@ type receiverRecord struct {
 }
 
 type EventManager struct {
+	log                *slog.Logger
 	mailbox            *mailbox.Mailbox
 	addReceiverCounter int
 	receivers          map[int]receiverRecord
@@ -47,8 +49,9 @@ type EventManager struct {
 	stopped atomic.Bool
 }
 
-func NewEventManager() *EventManager {
+func NewEventManager(log *slog.Logger) *EventManager {
 	eventManager := &EventManager{
+		log:       log,
 		receivers: make(map[int]receiverRecord),
 	}
 
@@ -56,14 +59,14 @@ func NewEventManager() *EventManager {
 }
 
 func (em *EventManager) Start() error {
-	fmt.Printf("Event manager starting\n")
+	em.log.Info("starting")
 	em.mailbox = mailbox.NewMailbox()
 	em.dispatchEventCh = queue.NewUnboundedChannel[dispatchRequest]()
 	em.dispatchDoneCh = make(chan error)
 
 	// Execution of registered listeners is done in a separate GoRoutine to allow
 	// event receivers to perform register/deregister operations.
-	go dispatchEvents(em.dispatchEventCh.Out(), em.dispatchDoneCh)
+	go dispatchEvents(em.log, em.dispatchEventCh.Out(), em.dispatchDoneCh)
 
 	return nil
 }
@@ -81,11 +84,11 @@ func (em *EventManager) Stop() {
 
 	// Safe to call multiple times; only the first call does anything.
 	if !em.stopped.CompareAndSwap(false, true) {
-		fmt.Printf("Event manager already stopping\n")
+		em.log.Debug("already stopping")
 		return
 	}
 
-	fmt.Printf("Event manager stopping\n")
+	em.log.Info("stopping")
 
 	// Stop the mailbox first, which guarantees nothing more can be queued for dispatch, then close
 	// the dispatch channel, which lets the dispatcher drain what's left and exit.
@@ -93,10 +96,10 @@ func (em *EventManager) Stop() {
 	em.dispatchEventCh.Close()
 
 	if dispatchErr := <-em.dispatchDoneCh; dispatchErr != nil {
-		fmt.Printf("EventManager terminated with error: %v\n", dispatchErr)
+		em.log.Error("terminated with error", "error", dispatchErr)
 	}
 
-	fmt.Printf("Event manager stopped\n")
+	em.log.Info("stopped")
 }
 
 func (em *EventManager) BroadcastEvent(sourcePluginType reflect.Type, sourceEntityId string, event any) error {
@@ -143,7 +146,7 @@ func (em *EventManager) RemoveReceiver(receiverHandle int) error {
 // if the predicate returns true, executes the registration's callback function via the plugin's plugin runner
 // goroutine.  Since the predicate executes directly, it's imperative that it's fast.
 func (em *EventManager) handleBroadcastEvent(request broadcastEventRequest) {
-	fmt.Printf("EventManager: Broadcasting event, %v\n", request)
+	em.log.Debug("broadcasting event", "event", request)
 
 	eventInfo := &events.EventInfo{
 		SourceEntityId:   request.sourceEntityId,
@@ -193,17 +196,14 @@ func (em *EventManager) handleRemoveReceiver(receiverHandle int) error {
 	return nil
 }
 
-func dispatchEvents(dispatchRequestCh <-chan dispatchRequest, doneCh chan error) {
+func dispatchEvents(log *slog.Logger, dispatchRequestCh <-chan dispatchRequest, doneCh chan error) {
 	defer close(doneCh)
 
 	for request := range dispatchRequestCh {
 		err := request.plugin.ExecErrorFn(func() error { return request.receiver(request.eventInfo) })
 
 		if err != nil {
-			fmt.Printf(
-				"EventManager: Event receiver %d returned error when processing %v\n",
-				request.handle,
-				*request.eventInfo)
+			log.Error("event receiver returned an error", "receiver", request.handle, "event", *request.eventInfo, "error", err)
 		}
 	}
 }

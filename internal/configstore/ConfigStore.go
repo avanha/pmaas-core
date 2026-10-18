@@ -3,6 +3,7 @@ package configstore
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,11 +12,13 @@ import (
 )
 
 type ConfigStore struct {
+	log *slog.Logger
 	dir string
 }
 
-func NewConfigStore() *ConfigStore {
+func NewConfigStore(log *slog.Logger) *ConfigStore {
 	return &ConfigStore{
+		log: log,
 		dir: storeDir(),
 	}
 }
@@ -83,7 +86,7 @@ func (cs *ConfigStore) Save(pluginType reflect.Type, data any) error {
 		return fmt.Errorf("failed to perform atomic rename: %w", err)
 	}
 
-	fmt.Printf("Saved config to %s", targetPath)
+	cs.log.Debug("saved config", "path", targetPath)
 
 	return nil
 }

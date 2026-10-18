@@ -1,11 +1,12 @@
 package http
 
 import (
-	"fmt"
+	"log/slog"
 	"net/http"
 )
 
 type dirWithLoggerFileSystem struct {
+	log      *slog.Logger
 	delegate http.FileSystem
 }
 
@@ -13,7 +14,7 @@ func (dwlfs dirWithLoggerFileSystem) Open(name string) (http.File, error) {
 	file, err := dwlfs.delegate.Open(name)
 
 	if err != nil {
-		fmt.Printf("Error opening %s: %v\n", name, err)
+		dwlfs.log.Debug("unable to open static content", "name", name, "error", err)
 	}
 
 	return file, err

@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
 	"os/signal"
 	"reflect"
 	"runtime/debug"
@@ -23,6 +25,7 @@ import (
 	"github.com/avanha/pmaas-core/internal/entitymanager"
 	"github.com/avanha/pmaas-core/internal/eventmanager"
 	pmaashttp "github.com/avanha/pmaas-core/internal/http"
+	corelogging "github.com/avanha/pmaas-core/internal/logging"
 	"github.com/avanha/pmaas-core/internal/plugins"
 	"github.com/avanha/pmaas-core/internal/pmaasserver"
 	"github.com/avanha/pmaas-spi"
@@ -33,6 +36,8 @@ import (
 const PmaasServerPmaasEntityId = "PMAAS_SERVER"
 
 type PMAAS struct {
+	log                   *slog.Logger
+	logRegistry           *corelogging.Registry
 	config                *config.Config
 	plugins               []*plugins.PluginWrapper
 	entityManager         *entitymanager.EntityManager
@@ -74,17 +79,29 @@ type PMAAS struct {
 }
 
 func NewPMAAS(config *config.Config) *PMAAS {
+	// The loggers come first, and are at their defaults until the levels that were kept are read, which needs the config
+	// store, which logs.
+	var configStore *configstore.ConfigStore
+
+	logRegistry := corelogging.NewRegistry(os.Stdout, func(settings corelogging.Settings) error {
+		return configStore.Save(reflect.TypeOf(settings), settings)
+	})
+	configStore = configstore.NewConfigStore(logRegistry.Logger("core.configstore"))
+	restoreLogLevels(logRegistry, configStore)
+
 	instance := &PMAAS{
 		config:        config,
-		entityManager: entitymanager.NewEntityManager(),
-		eventManager:  eventmanager.NewEventManager(),
-		dispatcher:    dispatcher.NewDispatcher(),
-		configStore:   configstore.NewConfigStore(),
+		log:           logRegistry.Logger("core"),
+		logRegistry:   logRegistry,
+		entityManager: entitymanager.NewEntityManager(logRegistry.Logger("core.entitymanager")),
+		eventManager:  eventmanager.NewEventManager(logRegistry.Logger("core.eventmanager")),
+		dispatcher:    dispatcher.NewDispatcher(logRegistry.Logger("core.dispatcher")),
+		configStore:   configStore,
 		startTime:     time.Now(),
 	}
 	instance.selfType = reflect.ValueOf(instance).Elem().Type()
 	instance.pmaasServerAdapter = pmaasServerAdapter{pmaas: instance}
-	instance.plugins = createPluginWrappers(instance.pmaasServerAdapter, withClock(config))
+	instance.plugins = createPluginWrappers(logRegistry.Logger("core.plugins"), instance.pmaasServerAdapter, withClock(config))
 	instance.pluginVersions = collectPluginVersions(instance.plugins)
 	buildInfo, _ := debug.ReadBuildInfo()
 	instance.assemblyName, instance.assemblyVersion = assemblyInfo(buildInfo)
@@ -165,18 +182,18 @@ func withClock(conf *config.Config) []config.PluginWithConfig {
 		conf.Plugins()...)
 }
 
-func createPluginWrappers(pmaasServerAdapter pmaasserver.PmaasServer, configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
+func createPluginWrappers(log *slog.Logger, pmaasServerAdapter pmaasserver.PmaasServer, configuredPlugins []config.PluginWithConfig) []*plugins.PluginWrapper {
 	wrappers := make([]*plugins.PluginWrapper, len(configuredPlugins))
 
 	for i, plugin := range configuredPlugins {
-		wrappers[i] = plugins.NewPluginWrapper(pmaasServerAdapter, plugin)
+		wrappers[i] = plugins.NewPluginWrapper(log, pmaasServerAdapter, plugin)
 	}
 
 	return wrappers
 }
 
 func (pmaas *PMAAS) Run() error {
-	fmt.Printf("pmaas.Run: Start\n")
+	pmaas.log.Info("start")
 
 	mainCtx, cancelFn := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancelFn()
@@ -203,7 +220,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 		}
 	}()
 
-	fmt.Printf("Initializing...\n")
+	pmaas.log.Info("initializing")
 
 	// Start and initialize each plugin
 	for _, plugin := range pmaas.plugins {
@@ -224,7 +241,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 		}
 	}
 
-	fmt.Printf("pmaas.Run: Starting core services...\n")
+	pmaas.log.Info("starting core services")
 	var err error
 
 	err = pmaas.eventManager.Start()
@@ -237,7 +254,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 		return err
 	}
 
-	fmt.Printf("pmaas.Run: Starting plugins...\n")
+	pmaas.log.Info("starting plugins")
 
 	startFailures := 0
 
@@ -249,7 +266,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 			plugin.Running = true
 		} else {
 			startFailures = startFailures + 1
-			fmt.Printf("%T failed to start: %s\n", plugin.Instance, err)
+			pmaas.log.Error("plugin failed to start", "plugin", plugin.ShortName(), "error", err)
 		}
 	}
 
@@ -259,21 +276,21 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 		httpServer, err = pmaas.startHttpServer()
 		if err == nil {
 			// Wait for the done signal
-			fmt.Printf("pmaas.Run: Running, waiting for done signal...\n")
+			pmaas.log.Info("running, waiting for done signal")
 			<-ctx.Done()
 		} else {
-			fmt.Printf("pmaas.Run: HttpServer start failed: %s\n", err)
+			pmaas.log.Error("HttpServer start failed", "error", err)
 		}
 	}
 
 	if httpServer != nil {
-		stopHttpServer(httpServer)
+		pmaas.stopHttpServer(httpServer)
 	}
 
-	fmt.Printf("pmaas.Run: Stopping plugins...\n")
-	stopPlugins(pmaas.plugins)
+	pmaas.log.Info("stopping plugins")
+	pmaas.stopPlugins(pmaas.plugins)
 
-	fmt.Printf("pmaas.Run: Stopping core services...\n")
+	pmaas.log.Info("stopping core services")
 
 	// No timeouts here, unlike the HTTP server above. The HTTP server waits on clients we don't control;
 	// these are our own code, so if either never returns, that's a bug to find, not to wait out.
@@ -285,7 +302,7 @@ func (pmaas *PMAAS) internalRun(ctx context.Context) error {
 	pmaas.eventManager.Stop()
 	done()
 
-	fmt.Printf("pmaas.Run: End\n")
+	pmaas.log.Info("end")
 
 	return err
 }
@@ -334,7 +351,7 @@ func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
 		parsed, err := url.Parse(baseUrl)
 
 		if err != nil {
-			fmt.Printf("pmaas.getBaseUrl: ignoring invalid configured base URL %q: %v\n", baseUrl, err)
+			pmaas.log.Warn("ignoring invalid configured base URL", "baseUrl", baseUrl, "error", err)
 			continue
 		}
 
@@ -346,7 +363,7 @@ func (pmaas *PMAAS) getBaseUrl(r *http.Request) (string, error) {
 	// Nothing in the response explains this to whoever clicked, so say what's wrong here, and what to do
 	// about it: this is a configuration mistake that's easy to make (e.g. changing the HTTP port without
 	// updating the base URLs).
-	fmt.Printf("pmaas.getBaseUrl: %s\n", describeBaseUrlMismatch(r, baseUrls))
+	pmaas.log.Warn(describeBaseUrlMismatch(r, baseUrls))
 
 	return "", fmt.Errorf("no configured base URL matches request host %q", r.Host)
 }
@@ -370,7 +387,7 @@ func describeBaseUrlMismatch(r *http.Request, configured []string) string {
 }
 
 func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
-	httpServer := pmaashttp.NewHttpServer(pmaas.config.HttpPort)
+	httpServer := pmaashttp.NewHttpServer(pmaas.logRegistry.Logger("core.http"), pmaas.config.HttpPort)
 	httpServer.RegisterPluginHandlers(pmaas.plugins)
 
 	if pmaas.tlsCertificateProvider != nil {
@@ -385,8 +402,8 @@ func (pmaas *PMAAS) startHttpServer() (*pmaashttp.HttpServer, error) {
 		origin = "defaulted from the HTTP port and whether a TLS certificate was provided; set Config.BaseURLs to override"
 	}
 
-	fmt.Printf("pmaas.Run: serving HTTP on port %d, TLS=%t, base URLs %q (%s)\n",
-		pmaas.config.HttpPort, pmaas.tlsCertificateProvider != nil, pmaas.baseUrls(), origin)
+	pmaas.log.Info("serving HTTP", "port", pmaas.config.HttpPort, "tls", pmaas.tlsCertificateProvider != nil,
+		"baseUrls", pmaas.baseUrls(), "baseUrlsOrigin", origin)
 
 	if pmaas.rootStatusHandler != nil {
 		httpServer.SetRootHandler(pmaas.handleRootStatusRequest)
@@ -417,23 +434,23 @@ func (pmaas *PMAAS) getServerStatus() spi.ServerStatus {
 	}
 }
 
-func stopHttpServer(httpServer *pmaashttp.HttpServer) {
+func (pmaas *PMAAS) stopHttpServer(httpServer *pmaashttp.HttpServer) {
 	ctx, cancelFn := context.WithDeadline(context.Background(), time.Now().Add(10*time.Second))
 	defer cancelFn()
 	err := httpServer.Stop(ctx)
 
 	if err != nil {
-		fmt.Printf("Error stopping HttpServer: %v", err)
+		pmaas.log.Error("error stopping HttpServer", "error", err)
 	}
 }
 
-func stopPlugins(plugins []*plugins.PluginWrapper) {
+func (pmaas *PMAAS) stopPlugins(plugins []*plugins.PluginWrapper) {
 	for i := len(plugins) - 1; i >= 0; i-- {
 		plugin := plugins[i]
 		startTime := time.Now()
 		if plugin.Running {
 			done := watchShutdownStep(fmt.Sprintf("plugin %T", plugin.Instance))
-			stopPlugin(plugin)
+			pmaas.stopPlugin(plugin)
 			done()
 		}
 
@@ -441,16 +458,16 @@ func stopPlugins(plugins []*plugins.PluginWrapper) {
 		plugin.StopPluginRunner()
 		stopped()
 		stopDuration := time.Now().Sub(startTime)
-		fmt.Printf("PMAAS Stopped %T in %v\n", plugin.Instance, stopDuration)
+		pmaas.log.Info("stopped plugin", "plugin", plugin.ShortName(), "took", stopDuration)
 	}
 }
 
-func stopPlugin(plugin *plugins.PluginWrapper) {
+func (pmaas *PMAAS) stopPlugin(plugin *plugins.PluginWrapper) {
 	var callbackChannel chan func() = nil
 	err := plugin.ExecVoidFn(func() { callbackChannel = plugin.Instance.Stop() })
 
 	if err != nil {
-		fmt.Printf("%T Stop failed: %s\n", plugin.Instance, err)
+		pmaas.log.Error("plugin stop failed", "plugin", plugin.ShortName(), "error", err)
 		plugin.Running = false
 		return
 	}
@@ -462,7 +479,7 @@ func stopPlugin(plugin *plugins.PluginWrapper) {
 			err = plugin.ExecVoidFn(callback)
 
 			if err != nil {
-				fmt.Printf("%T Stop callback failed: %s\n", plugin.Instance, err)
+				pmaas.log.Error("plugin stop callback failed", "plugin", plugin.ShortName(), "error", err)
 				doCallbacks = false
 			}
 		}
@@ -504,7 +521,7 @@ func (pmaas *PMAAS) renderJsonList(w http.ResponseWriter, _ *http.Request, items
 		_, err := w.Write(b)
 
 		if err != nil {
-			fmt.Printf("Error writing response: %s\n", err)
+			pmaas.log.Warn("error writing response", "error", err)
 		}
 	}
 }
@@ -661,7 +678,7 @@ func (pmaas *PMAAS) registerEntity(
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
-		fmt.Printf("Unable to broadcast %v: %v", event, err)
+		pmaas.log.Error("unable to broadcast", "event", event, "error", err)
 	}
 
 	return id, nil
@@ -684,7 +701,7 @@ func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWrapper, id string) error 
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
 	if err != nil {
-		fmt.Printf("Unable to broadcast %v: %v", event, err)
+		pmaas.log.Error("unable to broadcast", "event", event, "error", err)
 	}
 
 	return nil
@@ -810,4 +827,20 @@ func (pmaas *PMAAS) provideRootStatusHandler(handlerFunc spi.RootStatusHandlerFu
 
 func genericEntityRenderer(entity any) (string, error) {
 	return fmt.Sprintf("<div>%T</div>", entity), nil
+}
+
+// restoreLogLevels gives the loggers the levels that were kept. Nothing having been kept yet is no cause for complaint.
+func restoreLogLevels(registry *corelogging.Registry, store *configstore.ConfigStore) {
+	loaded, err := store.Load(reflect.TypeOf(corelogging.Settings{}), func(string) any { return &corelogging.Settings{} })
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			registry.Logger("core").Warn("unable to read the kept log levels, using the defaults", "error", err)
+		}
+
+		return
+	}
+
+	if settings, ok := loaded.(*corelogging.Settings); ok {
+		registry.Restore(*settings)
+	}
 }

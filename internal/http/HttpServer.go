@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math/rand"
 	"net/http"
 
@@ -17,6 +18,7 @@ import (
 var XsrfValidationStatus = "xsrf-validation-status"
 
 type HttpServer struct {
+	log            *slog.Logger
 	mux            *http.ServeMux
 	port           int
 	serverInstance *http.Server
@@ -25,9 +27,9 @@ type HttpServer struct {
 	rootHandler    http.HandlerFunc
 }
 
-func NewHttpServer(port int) *HttpServer {
-	httpServer := &HttpServer{mux: http.NewServeMux(), port: port}
-	httpServer.mux.HandleFunc("/hello", helloHandler)
+func NewHttpServer(log *slog.Logger, port int) *HttpServer {
+	httpServer := &HttpServer{log: log, mux: http.NewServeMux(), port: port}
+	httpServer.mux.HandleFunc("/hello", httpServer.helloHandler)
 	// "/{$}" matches only the exact root path, not every otherwise-unmatched request (which is
 	// what a plain "/" pattern would do) - see SetRootHandler.
 	httpServer.mux.HandleFunc("/{$}", httpServer.handleRoot)
@@ -47,12 +49,12 @@ func (hs *HttpServer) handleRoot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	defaultRootHandler(w, r)
+	hs.defaultRootHandler(w, r)
 }
 
 func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 	for _, plugin := range plugins {
-		fmt.Printf("Plugin %T config: %+v\n", plugin.Instance, plugin.Config)
+		hs.log.Debug("registering plugin handlers", "plugin", plugin.ShortName(), "config", plugin.Config)
 
 		if plugin.StaticContentDir != "" {
 			hs.configurePluginStaticContentDir(plugin, hs.mux)
@@ -62,11 +64,11 @@ func (hs *HttpServer) RegisterPluginHandlers(plugins []*plugins.PluginWrapper) {
 			handler := httpRegistration.HandlerFunc
 
 			if httpRegistration.RequiresXsrfValidation {
-				handler = xsrfRequiredMiddleware(handler)
+				handler = xsrfRequiredMiddleware(hs.log, handler)
 			}
 
 			if httpRegistration.SupportsXsrfValidation || httpRegistration.RequiresXsrfValidation {
-				handler = xsrfMiddleware(handler)
+				handler = xsrfMiddleware(hs.log, handler)
 			}
 
 			hs.mux.HandleFunc(httpRegistration.Pattern, handler)
@@ -93,7 +95,7 @@ func (hs *HttpServer) Start() error {
 
 	doneCh := make(chan error)
 	hs.runDoneCh = doneCh
-	go func() { run(hs.serverInstance, doneCh) }()
+	go func() { run(hs.log, hs.serverInstance, doneCh) }()
 
 	return nil
 }
@@ -106,13 +108,13 @@ func (hs *HttpServer) Stop(ctx context.Context) error {
 	serverInstance := hs.serverInstance
 	hs.serverInstance = nil
 
-	fmt.Printf("HttpServer: Shutdown started...\n")
+	hs.log.Info("shutdown started")
 	var err = serverInstance.Shutdown(ctx)
 
 	if err == nil {
-		fmt.Printf("HttpServer: Shutdown complete\n")
+		hs.log.Info("shutdown complete")
 	} else {
-		fmt.Printf("HttpServer: Shutdown completed with error: %s\n", err)
+		hs.log.Error("shutdown completed with error", "error", err)
 	}
 
 	select {
@@ -120,7 +122,7 @@ func (hs *HttpServer) Stop(ctx context.Context) error {
 		return fmt.Errorf("error stopping HttpServer, context done signal received while waiting for termination: %v", ctx.Err())
 	case err := <-hs.runDoneCh:
 		if err != nil {
-			fmt.Printf("HttpServer: Terminated with error: %v", err)
+			hs.log.Error("terminated with error", "error", err)
 		}
 		return nil
 	}
@@ -131,42 +133,40 @@ func (hs *HttpServer) configurePluginStaticContentDir(plugin *plugins.PluginWrap
 	pluginContentFS, staticContentDir := plugin.ContentFs()
 
 	if pluginContentFS == nil {
-		fmt.Printf("Unable to serve static content for %s, plugin did not provide an fs.FS instance\n", pluginPath)
+		hs.log.Warn("unable to serve static content, the plugin did not provide an fs.FS instance", "path", pluginPath)
 		return
 	}
 
 	pluginContentReadDirFs, ok := pluginContentFS.(fs.ReadDirFS)
 
 	if !ok {
-		fmt.Printf("Unable to serve static content for %s, fs.FS instance provided by plugin does not "+
-			"implement fs.ReadDirFS\n", pluginPath)
+		hs.log.Warn("unable to serve static content, the fs.FS instance the plugin provided does not implement fs.ReadDirFS", "path", pluginPath)
 		return
 	}
 
 	_, err := pluginContentReadDirFs.ReadDir(plugin.StaticContentDir)
 
 	if err != nil {
-		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+		hs.log.Warn("unable to serve static content", "path", pluginPath, "from", staticContentDir, "error", err)
 		return
 	}
 
 	pluginStaticContentFS, err := fs.Sub(pluginContentFS, plugin.StaticContentDir)
 
 	if err != nil {
-		fmt.Printf("Unable to serve %s from %s: %v\n", pluginPath, staticContentDir, err)
+		hs.log.Warn("unable to serve static content", "path", pluginPath, "from", staticContentDir, "error", err)
 		return
 	}
 
-	fmt.Printf("Serving static content for %s from %s\n",
-		pluginPath, staticContentDir+"/"+plugin.StaticContentDir)
+	hs.log.Debug("serving static content", "path", pluginPath, "from", staticContentDir+"/"+plugin.StaticContentDir)
 	serveMux.Handle(pluginPath,
 		http.StripPrefix(
 			pluginPath,
-			http.FileServer(dirWithLoggerFileSystem{delegate: http.FS(pluginStaticContentFS)})))
+			http.FileServer(dirWithLoggerFileSystem{log: hs.log, delegate: http.FS(pluginStaticContentFS)})))
 }
 
-func run(httpServer *http.Server, doneCh chan error) {
-	fmt.Printf("HttpServer: run() start\n")
+func run(log *slog.Logger, httpServer *http.Server, doneCh chan error) {
+	log.Debug("run start")
 	defer func() { close(doneCh) }()
 
 	var err error
@@ -184,29 +184,29 @@ func run(httpServer *http.Server, doneCh chan error) {
 	}
 
 	if err == nil || errors.Is(err, http.ErrServerClosed) {
-		fmt.Printf("HttpServer: run() %s completed\n", functionName)
+		log.Debug("run completed", "function", functionName)
 		err = nil
 	} else {
-		fmt.Printf("HttpServer: run() ListenAndServe completed with error: %s\n", err)
+		log.Error("run completed with error", "function", functionName, "error", err)
 		doneCh <- err
 	}
 }
 
-func defaultRootHandler(w http.ResponseWriter, _ *http.Request) {
+func (hs *HttpServer) defaultRootHandler(w http.ResponseWriter, _ *http.Request) {
 	_, err := io.WriteString(w, "Hello, no status provider available")
 	if err != nil {
-		fmt.Printf("Error writing response: %v\n", err)
+		hs.log.Warn("error writing response", "error", err)
 	}
 }
 
-func helloHandler(w http.ResponseWriter, _ *http.Request) {
+func (hs *HttpServer) helloHandler(w http.ResponseWriter, _ *http.Request) {
 	_, err := io.WriteString(w, "Hello!\n")
 	if err != nil {
-		fmt.Printf("Error writing response: %v\n", err)
+		hs.log.Warn("error writing response", "error", err)
 	}
 }
 
-func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func xsrfMiddleware(log *slog.Logger, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		currentCookie, err := r.Cookie("ra-src")
 		currentRaValue := ""
@@ -226,8 +226,8 @@ func xsrfMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		if suppliedRaValue != "" && subtle.ConstantTimeCompare([]byte(suppliedRaValue), []byte(currentRaValue)) != 1 {
 			// Token was supplied but does not match the current value
-			fmt.Printf("xsrf: rejecting %s %q from %s: the ra header does not match the ra-src cookie\n",
-				r.Method, r.URL.Path, r.RemoteAddr)
+			log.Warn("xsrf: rejecting a request, the ra header does not match the ra-src cookie",
+				"method", r.Method, "path", r.URL.Path, "from", r.RemoteAddr)
 			http.Error(w, "XSRF validation failed", http.StatusForbidden)
 			return
 		}
@@ -249,13 +249,13 @@ func writeRaSrc(w http.ResponseWriter) {
 	http.SetCookie(w, &newCookie)
 }
 
-func xsrfRequiredMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func xsrfRequiredMiddleware(log *slog.Logger, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Context().Value(XsrfValidationStatus) == nil {
 			// Only reachable when the request had neither an ra-src cookie nor an ra header, i.e. the
 			// browser hasn't loaded a page from this server yet (which is what sets the cookie).
-			fmt.Printf("xsrf: rejecting %s %q from %s: no ra-src cookie was sent, so the request can't be validated\n",
-				r.Method, r.URL.Path, r.RemoteAddr)
+			log.Warn("xsrf: rejecting a request, no ra-src cookie was sent, so it can't be validated",
+				"method", r.Method, "path", r.URL.Path, "from", r.RemoteAddr)
 			http.Error(w, "XSRF validation required", http.StatusBadRequest)
 			return
 		}

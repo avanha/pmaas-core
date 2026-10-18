@@ -3,9 +3,11 @@ package clock
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/avanha/pmaas-spi"
+	"github.com/avanha/pmaas-spi/logging"
 )
 
 // eventSourceId is what the clock's events say they're from. The clock isn't an entity, so it isn't an entity's id,
@@ -16,6 +18,7 @@ const eventSourceId = "PMAAS_CLOCK"
 // it broadcasts an event as each minute, hour, day, month and year changes.
 type Plugin struct {
 	container spi.IPMAASContainer
+	log       *slog.Logger
 
 	// now and wait are what the driver is given. They're the real ones, except in tests.
 	now  func() time.Time
@@ -38,6 +41,7 @@ func (p *Plugin) ShortName() string {
 
 func (p *Plugin) Init(container spi.IPMAASContainer) {
 	p.container = container
+	p.log = logging.For(container)
 }
 
 func (p *Plugin) Start() {
@@ -49,7 +53,7 @@ func (p *Plugin) Start() {
 		wait: p.wait,
 		emit: func(event any) {
 			if err := p.container.BroadcastEvent(eventSourceId, event); err != nil {
-				fmt.Printf("%T ERROR: unable to broadcast %T: %v\n", *p, event, err)
+				p.log.Error("unable to broadcast", "event", fmt.Sprintf("%T", event), "error", err)
 			}
 		},
 	}

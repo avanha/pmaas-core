@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"reflect"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/avanha/pmaas-spi"
 	"github.com/avanha/pmaas-spi/entity"
 	"github.com/avanha/pmaas-spi/events"
+	"github.com/avanha/pmaas-spi/logging"
 )
 
 // containerAdapter is an implementation of spi.IPMAASContainer.  It wraps the reference to the
@@ -75,8 +77,8 @@ func (ca *containerAdapter) AddJsonRoute(
 				err := json.NewDecoder(r.Body).Decode(request)
 
 				if err != nil {
-					fmt.Printf("%s: %s %q: unable to parse the request body: %v\n",
-						ca.target.ShortName(), r.Method, r.URL.Path, err)
+					ca.pmaas.logRegistry.PluginLogger(ca.target.ShortName()).Warn("unable to parse the request body",
+						"method", r.Method, "path", r.URL.Path, "error", err)
 					http.Error(w, "Failed to parse request body", http.StatusBadRequest)
 					return
 				}
@@ -86,7 +88,7 @@ func (ca *containerAdapter) AddJsonRoute(
 
 			if err != nil {
 				// The caller gets this in the response, but whoever runs the server doesn't see responses.
-				fmt.Printf("%s: %s %q failed: %v\n", ca.target.ShortName(), r.Method, r.URL.Path, err)
+				ca.pmaas.logRegistry.PluginLogger(ca.target.ShortName()).Error("request failed", "method", r.Method, "path", r.URL.Path, "error", err)
 				http.Error(w, fmt.Sprintf("Failed to handle request: %v", err), http.StatusInternalServerError)
 				return
 			}
@@ -222,4 +224,15 @@ func (ca *containerAdapter) ProvideTLSCertificate(
 
 func (ca *containerAdapter) ProvideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc) error {
 	return ca.pmaas.provideRootStatusHandler(handlerFunc)
+}
+
+// Logger and LogController make the container a logging.Provider.
+var _ logging.Provider = (*containerAdapter)(nil)
+
+func (ca *containerAdapter) Logger(names ...string) *slog.Logger {
+	return ca.pmaas.logRegistry.PluginLogger(ca.target.ShortName(), names...)
+}
+
+func (ca *containerAdapter) LogController() logging.Controller {
+	return ca.pmaas.logRegistry
 }

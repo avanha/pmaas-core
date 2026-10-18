@@ -1,57 +1,55 @@
 package core
 
 import (
+	"context"
 	"crypto/tls"
-	"io"
+	"log/slog"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 
 	"github.com/avanha/pmaas-core/config"
 )
 
-// captureStdout returns everything f printed to stdout. The server logs with fmt.Printf, so this is how
-// a test sees what an operator would.
-func captureStdout(t *testing.T, f func()) string {
-	t.Helper()
+// recordHandler is a slog.Handler that keeps each record's message and attributes as plain text, unescaped, so that a
+// test sees what the server said.
+type recordHandler struct{ out *strings.Builder }
 
-	reader, writer, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+func (h recordHandler) Enabled(context.Context, slog.Level) bool { return true }
 
-	original := os.Stdout
-	os.Stdout = writer
+func (h recordHandler) Handle(_ context.Context, r slog.Record) error {
+	h.out.WriteString(r.Message)
 
-	defer func() { os.Stdout = original }()
+	r.Attrs(func(a slog.Attr) bool {
+		h.out.WriteString(" " + a.Key + "=" + a.Value.String())
+		return true
+	})
 
-	done := make(chan string)
-	go func() {
-		output, _ := io.ReadAll(reader)
-		done <- string(output)
-	}()
+	h.out.WriteString("\n")
 
-	f()
-
-	_ = writer.Close()
-	os.Stdout = original
-
-	return <-done
+	return nil
 }
 
-func newBaseUrlTestServer(baseUrls ...string) *PMAAS {
-	return &PMAAS{config: &config.Config{BaseURLs: baseUrls}}
+func (h recordHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h recordHandler) WithGroup(string) slog.Handler      { return h }
+
+// newBaseUrlTestServer is a server configured with the base URLs, and what it logs.
+func newBaseUrlTestServer(baseUrls ...string) (*PMAAS, *strings.Builder) {
+	var out strings.Builder
+
+	return &PMAAS{config: &config.Config{BaseURLs: baseUrls}, log: slog.New(recordHandler{&out})}, &out
 }
 
 func TestGetBaseUrl_MatchingHostReturnsTheConfiguredURLQuietly(t *testing.T) {
-	pmaas := newBaseUrlTestServer("http://localhost:8090", "https://home.example.com")
+	pmaas, logged := newBaseUrlTestServer("http://localhost:8090", "https://home.example.com")
 	request := httptest.NewRequest("POST", "https://home.example.com/plugins/x", nil)
 
 	var got string
 	var err error
 
-	output := captureStdout(t, func() { got, err = pmaas.getBaseUrl(request) })
+	got, err = pmaas.getBaseUrl(request)
+
+	output := logged.String()
 
 	if err != nil || got != "https://home.example.com" {
 		t.Fatalf("got %q, %v", got, err)
@@ -65,12 +63,14 @@ func TestGetBaseUrl_MatchingHostReturnsTheConfiguredURLQuietly(t *testing.T) {
 // This is the mistake that motivated the logging: changing the HTTP port without updating the base
 // URLs. The request fails, and without a log line nobody can tell why.
 func TestGetBaseUrl_MismatchIsLoggedWithWhatToDoAboutIt(t *testing.T) {
-	pmaas := newBaseUrlTestServer("http://localhost:8090")
+	pmaas, logged := newBaseUrlTestServer("http://localhost:8090")
 	request := httptest.NewRequest("POST", "http://localhost:8443/plugins/nestthermostat/oauthAttempt", nil)
 
 	var err error
 
-	output := captureStdout(t, func() { _, err = pmaas.getBaseUrl(request) })
+	_, err = pmaas.getBaseUrl(request)
+
+	output := logged.String()
 
 	if err == nil {
 		t.Fatal("expected an error")
@@ -90,11 +90,13 @@ func TestGetBaseUrl_MismatchIsLoggedWithWhatToDoAboutIt(t *testing.T) {
 }
 
 func TestGetBaseUrl_MismatchOverTLSSuggestsHttps(t *testing.T) {
-	pmaas := newBaseUrlTestServer("http://localhost:8090")
+	pmaas, logged := newBaseUrlTestServer("http://localhost:8090")
 	request := httptest.NewRequest("POST", "https://localhost:8443/x", nil)
 	request.TLS = &tls.ConnectionState{}
 
-	output := captureStdout(t, func() { _, _ = pmaas.getBaseUrl(request) })
+	_, _ = pmaas.getBaseUrl(request)
+
+	output := logged.String()
 
 	if !strings.Contains(output, `add "https://localhost:8443" to`) {
 		t.Errorf("expected an https suggestion, got:\n%s", output)
@@ -113,14 +115,16 @@ func TestDescribeBaseUrlMismatch_QuotesWhatCameFromTheRequest(t *testing.T) {
 	}
 }
 
-func newDefaultedServer(port int, withTlsCertificate bool) *PMAAS {
-	pmaas := &PMAAS{config: &config.Config{HttpPort: port}}
+func newDefaultedServer(port int, withTlsCertificate bool) (*PMAAS, *strings.Builder) {
+	var out strings.Builder
+
+	pmaas := &PMAAS{config: &config.Config{HttpPort: port}, log: slog.New(recordHandler{&out})}
 
 	if withTlsCertificate {
 		pmaas.tlsCertificateProvider = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil }
 	}
 
-	return pmaas
+	return pmaas, &out
 }
 
 func TestNewConfig_LeavesBaseURLsToBeDefaulted(t *testing.T) {
@@ -144,7 +148,8 @@ func TestBaseUrls_DefaultFollowsThePortAndWhetherTlsIsProvided(t *testing.T) {
 		{"https on the http default port keeps it", 80, true, "https://localhost:80"},
 		{"http on the https default port keeps it", 443, false, "http://localhost:443"},
 	} {
-		got := newDefaultedServer(c.port, c.tls).baseUrls()
+		server, _ := newDefaultedServer(c.port, c.tls)
+		got := server.baseUrls()
 
 		if len(got) != 1 || got[0] != c.want {
 			t.Errorf("%s: got %q, want [%q]", c.name, got, c.want)
@@ -153,7 +158,7 @@ func TestBaseUrls_DefaultFollowsThePortAndWhetherTlsIsProvided(t *testing.T) {
 }
 
 func TestBaseUrls_ExplicitConfigurationWinsOverTheDefault(t *testing.T) {
-	pmaas := newDefaultedServer(8443, true)
+	pmaas, _ := newDefaultedServer(8443, true)
 	pmaas.config.BaseURLs = []string{"https://home.example.com"}
 
 	got := pmaas.baseUrls()
@@ -167,13 +172,15 @@ func TestBaseUrls_ExplicitConfigurationWinsOverTheDefault(t *testing.T) {
 // the base URL pointing at the old one.
 func TestGetBaseUrl_DefaultedURLMatchesTheServersActualPort(t *testing.T) {
 	for _, tlsProvided := range []bool{false, true} {
-		pmaas := newDefaultedServer(8443, tlsProvided)
+		pmaas, logged := newDefaultedServer(8443, tlsProvided)
 		request := httptest.NewRequest("POST", "https://localhost:8443/plugins/nestthermostat/oauthAttempt", nil)
 
 		var got string
 		var err error
 
-		output := captureStdout(t, func() { got, err = pmaas.getBaseUrl(request) })
+		got, err = pmaas.getBaseUrl(request)
+
+		output := logged.String()
 
 		want := "http://localhost:8443"
 		if tlsProvided {
@@ -187,12 +194,14 @@ func TestGetBaseUrl_DefaultedURLMatchesTheServersActualPort(t *testing.T) {
 }
 
 func TestGetBaseUrl_DefaultedURLStillRejectsOtherHosts(t *testing.T) {
-	pmaas := newDefaultedServer(8443, true)
+	pmaas, logged := newDefaultedServer(8443, true)
 	request := httptest.NewRequest("POST", "https://attacker.example.com:8443/x", nil)
 
 	var err error
 
-	output := captureStdout(t, func() { _, err = pmaas.getBaseUrl(request) })
+	_, err = pmaas.getBaseUrl(request)
+
+	output := logged.String()
 
 	if err == nil {
 		t.Fatal("a host the server wasn't configured for must not match")
