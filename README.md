@@ -159,3 +159,21 @@ complete before `start` so plugins can use them.
 
 Complex plugins that want more control over their concurrency could configure the core to
 skip the channel transfer and just invoke the callback directly.
+
+## Logging
+
+The server and its plugins log through `log/slog`, one logger per component named by dotted path: `core`,
+`core.eventmanager`, `plugin.esphome`, `plugin.esphome.broker`, and so on. A plugin gets its logger from its container:
+`logging.For(container)` (package `github.com/avanha/pmaas-spi/logging`), or `logging.For(container, "part")` for a part
+of it that deserves a level of its own. A container that is not the server's, such as a stand-in in a test, gets the process's
+default logger.
+
+A component's level is the one set for it, else the nearest set for a component above it, else the default, which is
+**WARN**. The levels are changed while the server runs, from the Logging page of `pmaas-plugin-basicwebui` (or through
+`logging.ControllerOf(container)`), and are kept across restarts in `logging_Settings.json` beside the plugins' own saved
+configuration. A component appears on the page once something has asked for its logger.
+
+Use Debug for what is only wanted when looking into something (every event broadcast, every poll), Info for what happens in
+normal running (a plugin starting, an automation running), Warn for what is wrong but carried on from, and Error for what is
+not. Pass the details as attributes (`log.Error("unable to register", "device", name, "error", err)`) rather than in the
+message.
