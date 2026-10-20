@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -57,6 +58,11 @@ type PMAAS struct {
 	// any goroutine without locking.
 	menuEntries            []*spi.MenuEntry
 	menuEntriesByShortName map[string]*spi.MenuEntry
+
+	// entityInfo is what the server knows of each entity beyond what the entity manager keeps: its name, the plugin that owns it, and
+	// how it looks on a page (see GetEntityViews). Registrations come from the plugins' goroutines and reads from page handlers.
+	entityInfoMu sync.RWMutex
+	entityInfo   map[string]*entityInfo
 
 	// tlsCertificateProvider is set by at most one plugin's ProvideTLSCertificate call, during Init
 	// or Start - i.e. before startHttpServer ever reads it, since that only happens after every
@@ -114,6 +120,7 @@ func NewPMAAS(config *config.Config) *PMAAS {
 	instance.closedCallbackChannel = make(chan func())
 	close(instance.closedCallbackChannel)
 	instance.menuEntriesByShortName = make(map[string]*spi.MenuEntry)
+	instance.entityInfo = make(map[string]*entityInfo)
 
 	return instance
 }
@@ -706,6 +713,8 @@ func (pmaas *PMAAS) registerEntity(
 		return "", err
 	}
 
+	pmaas.setEntityInfo(id, &entityInfo{name: name, entityType: entityType, owner: sourcePlugin})
+
 	event := events.EntityRegisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityType, Name: name}, StubFactoryFn: wrappedStubFactory}
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
 
@@ -728,6 +737,8 @@ func (pmaas *PMAAS) deregisterEntity(_ *plugins.PluginWrapper, id string) error 
 	if err != nil {
 		return fmt.Errorf("deregisterEntity failed, unable to remove entity %s: %v", id, err)
 	}
+
+	pmaas.removeEntityInfo(id)
 
 	event := events.EntityDeregisteredEvent{EntityEvent: events.EntityEvent{Id: id, EntityType: entityRecord.GetEntityType()}}
 	err = pmaas.eventManager.BroadcastEvent(pmaas.selfType, PmaasServerPmaasEntityId, event)
@@ -769,7 +780,7 @@ func (pmaas *PMAAS) getEntities(
 		result[i] = entity.RegisteredEntityInfo{
 			Id:            registration.GetId(),
 			EntityType:    registration.GetEntityType(),
-			Name:          "Name_" + registration.GetId(),
+			Name:          pmaas.entityName(registration.GetId()),
 			StubFactoryFn: registration.GetStubFactoryFn(),
 		}
 	}

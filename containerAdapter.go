@@ -165,6 +165,14 @@ func (ca *containerAdapter) RegisterEntity(
 	return ca.pmaas.registerEntity(ca.target, uniqueData, entityType, name, stubFactoryFn)
 }
 
+func (ca *containerAdapter) RegisterEntityView(entityId string, view spi.EntityViewFunc) error {
+	return ca.pmaas.registerEntityView(ca.target, entityId, view)
+}
+
+func (ca *containerAdapter) GetEntityViews(entityIds []string) []spi.EntityViewResult {
+	return ca.pmaas.getEntityViews(entityIds)
+}
+
 func (ca *containerAdapter) DeregisterEntity(id string) error {
 	return ca.pmaas.deregisterEntity(ca.target, id)
 }
