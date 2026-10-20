@@ -14,6 +14,8 @@ import (
 	"os/signal"
 	"reflect"
 	"runtime/debug"
+	"slices"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -124,7 +126,7 @@ func NewPMAAS(config *config.Config) *PMAAS {
 // plugins are being initialized (see containerAdapter.AddRouteWithOptions), before the HTTP server
 // starts, so no synchronization is needed here or in getMenu.
 func (pmaas *PMAAS) registerMenuRoute(
-	pluginShortName string, fullPath string, relativePath string, options *spi.HttpHandlerOptions) {
+	pluginShortName string, fullPath string, relativePath string, options *spi.HttpHandlerOptions, priorityOverride *int) {
 	isListRoute := relativePath == ""
 
 	include := isListRoute
@@ -157,18 +159,48 @@ func (pmaas *PMAAS) registerMenuRoute(
 		entry.Path = fullPath
 		entry.Label = label
 		entry.Icon = options.MenuIcon
+		entry.Priority = options.MenuPriority
+
+		if priorityOverride != nil {
+			entry.Priority = *priorityOverride
+		}
 	} else {
 		entry.Children = append(entry.Children, spi.MenuEntry{Path: fullPath, Label: label, Icon: options.MenuIcon})
 	}
 }
 
-// getMenu returns a snapshot of the navigation menu. Each top-level entry is copied out of the
-// pmaas.menuEntries pointers so the caller can't mutate this PMAAS instance's own state through it.
+// statusMenuPriority is where the Status entry goes unless the plugin that provides it is configured otherwise: first.
+const statusMenuPriority = 100
+
+// getMenu returns a snapshot of the navigation menu, in order: by priority, highest first, then by label without regard to case.
+// The entries with a priority above 0 come first, and if there are any others a separator is put between the two. Each top-level
+// entry is copied out of the pmaas.menuEntries pointers so the caller can't mutate this PMAAS instance's own state through it.
 func (pmaas *PMAAS) getMenu() []spi.MenuEntry {
 	result := make([]spi.MenuEntry, len(pmaas.menuEntries))
 
 	for i, entry := range pmaas.menuEntries {
 		result[i] = *entry
+	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].Priority != result[j].Priority {
+			return result[i].Priority > result[j].Priority
+		}
+
+		return strings.ToLower(result[i].Label) < strings.ToLower(result[j].Label)
+	})
+
+	// The first entry that is not set apart, if there is one after an entry that is.
+	for i, entry := range result {
+		if entry.Priority > 0 {
+			continue
+		}
+
+		if i > 0 {
+			result = slices.Insert(result, i, spi.MenuEntry{Separator: true})
+		}
+
+		break
 	}
 
 	return result
@@ -810,17 +842,21 @@ func (pmaas *PMAAS) provideTLSCertificate(
 	return nil
 }
 
-func (pmaas *PMAAS) provideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc) error {
+func (pmaas *PMAAS) provideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc, priorityOverride *int) error {
 	if pmaas.rootStatusHandler != nil {
 		return errors.New("a root status handler has already been registered by another plugin")
 	}
 
 	pmaas.rootStatusHandler = handlerFunc
 
-	// Prepended, not appended, so the status page reliably ends up first in the nav menu - the
-	// natural "home" position - regardless of which plugin happens to register it, or when
-	// during plugin initialization that happens relative to every other plugin's own routes.
-	pmaas.menuEntries = append([]*spi.MenuEntry{{Path: "/", Label: "Status"}}, pmaas.menuEntries...)
+	// The status page is first in the menu, the natural "home" position, because its priority is the highest, whichever plugin
+	// registers it and whenever during plugin initialization that happens.
+	priority := statusMenuPriority
+	if priorityOverride != nil {
+		priority = *priorityOverride
+	}
+
+	pmaas.menuEntries = append(pmaas.menuEntries, &spi.MenuEntry{Path: "/", Label: "Status", Priority: priority})
 
 	return nil
 }

@@ -60,7 +60,7 @@ func (ca *containerAdapter) AddRouteWithOptions(path string, handlerFunc http.Ha
 
 	ca.target.HttpHandlers = append(ca.target.HttpHandlers, registration)
 
-	ca.pmaas.registerMenuRoute(pluginShortName, fullPath, path, options)
+	ca.pmaas.registerMenuRoute(pluginShortName, fullPath, path, options, ca.target.Config.MenuPriority)
 }
 
 func (ca *containerAdapter) AddJsonRoute(
@@ -223,7 +223,7 @@ func (ca *containerAdapter) ProvideTLSCertificate(
 }
 
 func (ca *containerAdapter) ProvideRootStatusHandler(handlerFunc spi.RootStatusHandlerFunc) error {
-	return ca.pmaas.provideRootStatusHandler(handlerFunc)
+	return ca.pmaas.provideRootStatusHandler(handlerFunc, ca.target.Config.MenuPriority)
 }
 
 // Logger and LogController make the container a logging.Provider.
