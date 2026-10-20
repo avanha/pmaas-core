@@ -4,5 +4,5 @@ go 1.27.1
 
 require (
 	github.com/avanha/pmaas-common v0.0.5
-	github.com/avanha/pmaas-spi v0.0.14
+	github.com/avanha/pmaas-spi v0.0.21
 )
