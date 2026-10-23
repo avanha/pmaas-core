@@ -1,0 +1,19 @@
+[Unit]
+Description={{.Description}}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart={{.ExecStart}}
+{{- if .WaitForTimeSync}}
+# A Raspberry Pi has no clock of its own: wait, at most a minute, for the time to be set before starting, so that what is logged and
+# scheduled early on has the right time. It starts anyway when the time cannot be set. (A unit writes each dollar sign of the shell as two.)
+ExecStartPre=/bin/sh -c 'command -v timedatectl >/dev/null 2>&1 || exit 0; i=0; while [ $$i -lt 60 ]; do [ "$$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] && exit 0; i=$$((i+1)); sleep 1; done; exit 0'
+{{- end}}
+Restart=on-failure
+RestartSec=5
+# The server stops its plugins in order when it is told to stop; give them time before systemd kills it.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

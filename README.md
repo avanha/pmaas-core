@@ -177,3 +177,18 @@ Use Debug for what is only wanted when looking into something (every event broad
 normal running (a plugin starting, an automation running), Warn for what is wrong but carried on from, and Error for what is
 not. Pass the details as attributes (`log.Error("unable to register", "device", name, "error", err)`) rather than in the
 message.
+
+## Installing an assembly as a systemd service
+
+`service.Handle` (package `github.com/avanha/pmaas-core/service`) gives an assembly `--install-systemd-unit`, `--uninstall-systemd-unit` and
+`--print-systemd-unit`. Call it first thing in `main`:
+
+```go
+if handled, code := service.Handle(os.Args[1:], os.Stdout, os.Stderr, service.Options{Description: "PMAAS assembly"}); handled {
+	os.Exit(code)
+}
+```
+
+It writes a systemd *user* unit for the running executable (named for it, with its full path worked out), and runs it again to update it. It does not
+enable or start it: it says what to run. The default unit waits up to a minute for the clock to be set, then starts the assembly; an assembly
+can bundle its own template (`Options.Template`) or leave the wait out (`Options.SkipTimeSyncWait`). Linux only: elsewhere the flags say so.
